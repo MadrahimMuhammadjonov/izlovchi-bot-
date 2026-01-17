@@ -25,7 +25,7 @@ bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 client = TelegramClient(StringSession(SESSION_STRING), API_ID, API_HASH)
 
-# --- DATABASE ---
+# --- DATABASE FUNKSIYALARI ---
 def init_db():
     conn = sqlite3.connect('bot_data.db')
     c = conn.cursor()
@@ -59,7 +59,7 @@ def main_menu_keyboard():
 def back_keyboard():
     return InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🔙 Orqaga", callback_data='back_menu')]])
 
-# --- BOT HANDLERLARI ---
+# --- BOT HANDLERLARI (ADMIN PANEL) ---
 @dp.message(Command("start"))
 async def start_handler(message: types.Message):
     if message.from_user.id == ADMIN_ID:
@@ -84,10 +84,10 @@ async def view_keywords(callback: types.CallbackQuery):
 @dp.callback_query(F.data == "delete_keywords")
 async def delete_keywords_menu(callback: types.CallbackQuery):
     kws = db_query("SELECT keyword FROM keywords", fetch=True)
-    if not kws: return await callback.answer("Bo'sh")
+    if not kws: return await callback.answer("Ro'yxat bo'sh")
     kb = [[InlineKeyboardButton(text=f"❌ {k[0]}", callback_data=f"delkw_{k[0]}")] for k in kws]
     kb.append([InlineKeyboardButton(text="🔙 Orqaga", callback_data="back_menu")])
-    await callback.message.edit_text("🗑 <b>O'chirish:</b>", reply_markup=InlineKeyboardMarkup(inline_keyboard=kb), parse_mode="HTML")
+    await callback.message.edit_text("🗑 <b>O'chirish uchun tanlang:</b>", reply_markup=InlineKeyboardMarkup(inline_keyboard=kb), parse_mode="HTML")
 
 @dp.callback_query(F.data.startswith("delkw_"))
 async def del_keyword(callback: types.CallbackQuery):
@@ -109,10 +109,10 @@ async def view_groups(callback: types.CallbackQuery):
 @dp.callback_query(F.data == "delete_search_group")
 async def delete_group_menu(callback: types.CallbackQuery):
     gps = db_query("SELECT group_name, group_id FROM search_groups", fetch=True)
-    if not gps: return await callback.answer("Bo'sh")
+    if not gps: return await callback.answer("Ro'yxat bo'sh")
     kb = [[InlineKeyboardButton(text=f"🗑 {g[0]}", callback_data=f"delgp_{g[1]}")] for g in gps]
     kb.append([InlineKeyboardButton(text="🔙 Orqaga", callback_data="back_menu")])
-    await callback.message.edit_text("🗑 <b>O'chirish:</b>", reply_markup=InlineKeyboardMarkup(inline_keyboard=kb), parse_mode="HTML")
+    await callback.message.edit_text("🗑 <b>Guruhni o'chirish:</b>", reply_markup=InlineKeyboardMarkup(inline_keyboard=kb), parse_mode="HTML")
 
 @dp.callback_query(F.data.startswith("delgp_"))
 async def del_group(callback: types.CallbackQuery):
@@ -129,19 +129,20 @@ async def handle_text(message: types.Message):
 
     if state == 'waiting_keyword':
         db_query("INSERT OR IGNORE INTO keywords (keyword) VALUES (?)", (message.text.strip(),))
-        await message.answer("✅ Qo'shildi", reply_markup=main_menu_keyboard())
+        await message.answer(f"✅ '{html.escape(message.text)}' qo'shildi", reply_markup=main_menu_keyboard(), parse_mode="HTML")
         db_query("DELETE FROM user_state WHERE user_id=?", (message.from_user.id,))
     elif state == 'waiting_group':
         try:
             entity = await client.get_entity(message.text.strip())
             await client(functions.channels.JoinChannelRequest(channel=entity))
-            db_query("INSERT OR IGNORE INTO search_groups (group_id, group_name) VALUES (?, ?)", (entity.id if str(entity.id).startswith("-100") else int(f"-100{entity.id}"), entity.title))
-            await message.answer("✅ Guruh qo'shildi", reply_markup=main_menu_keyboard())
+            group_id = entity.id if str(entity.id).startswith("-100") else int(f"-100{entity.id}")
+            db_query("INSERT OR IGNORE INTO search_groups (group_id, group_name) VALUES (?, ?)", (group_id, entity.title))
+            await message.answer(f"✅ '{html.escape(entity.title)}' qo'shildi", reply_markup=main_menu_keyboard(), parse_mode="HTML")
             db_query("DELETE FROM user_state WHERE user_id=?", (message.from_user.id,))
         except Exception as e:
-            await message.answer(f"❌ Xato: {e}", reply_markup=back_keyboard())
+            await message.answer(f"❌ Xato: {html.escape(str(e))}", reply_markup=back_keyboard(), parse_mode="HTML")
 
-# --- USERBOT VA TUGMA LOGIKASI ---
+# --- USERBOT (IZLASH VA YUBORISH) ---
 @client.on(events.NewMessage)
 async def userbot_handler(event):
     try:
@@ -158,40 +159,59 @@ async def userbot_handler(event):
             chat = await event.get_chat()
             sender = await event.get_sender()
             
-            sender_name = html.escape(f"{sender.first_name or ''} {sender.last_name or ''}".strip())
+            # Matnlarni xavfsiz holatga keltirish (escape)
+            sender_name = html.escape(f"{sender.first_name or ''} {sender.last_name or ''}".strip() or "Ismsiz")
             group_title = html.escape(getattr(chat, 'title', 'Noma`lum'))
-            safe_text = html.escape(text[:800])
+            safe_text = html.escape(text[:800]) # Xabar juda uzun bo'lsa kesiladi
             
+            # --- Profil Havolasi Logikasi ---
+            if sender.username:
+                profile_link = f"https://t.me/{sender.username}"
+                # Tugma yaratish (Username bo'lsa xavfsiz)
+                kb = InlineKeyboardMarkup(inline_keyboard=[[
+                    InlineKeyboardButton(text="👤 Profilga o'tish", url=profile_link)
+                ]])
+                mention_html = f"<a href='{profile_link}'>{sender_name}</a>"
+            else:
+                # Username bo'lmasa, BUTTON_USER_INVALID xatosidan qochish uchun tugma ishlatmaymiz
+                # Buning o'rniga matn ichiga mention qo'shamiz
+                mention_html = f"<a href='tg://user?id={sender.id}'>{sender_name} (ID: {sender.id})</a>"
+                kb = None # Tugma yo'q
+
             report = (
-                "🔍 <b>Yangi xabar!</b>\n\n"
+                "🔍 <b>Yangi xabar topildi!</b>\n\n"
                 f"<b>📍 Guruh:</b> {group_title}\n"
-                f"<b>👤 Kimdan:</b> {sender_name}\n"
-                f"<b>🔑 Kalit so'z:</b> {', '.join(found)}\n\n"
+                f"<b>👤 Foydalanuvchi:</b> {mention_html}\n"
+                f"<b>🔑 Kalit so'zlar:</b> {', '.join(found)}\n\n"
                 f"<b>📝 Xabar:</b>\n<i>{safe_text}</i>"
             )
 
-            # --- TUGMA YARATISH ---
-            # Agar username bo'lsa, t.me linki, bo'lmasa tg://user?id linki ishlatiladi
-            profile_url = f"https://t.me/{sender.username}" if sender.username else f"tg://user?id={sender.id}"
-            
-            kb = InlineKeyboardMarkup(inline_keyboard=[[
-                InlineKeyboardButton(text="👤 Profilga o'tish", url=profile_url)
-            ]])
-
-            await bot.send_message(
-                chat_id=PERSONAL_GROUP_ID, 
-                text=report, 
-                reply_markup=kb, 
-                parse_mode="HTML"
-            )
+            try:
+                await bot.send_message(
+                    chat_id=PERSONAL_GROUP_ID, 
+                    text=report, 
+                    reply_markup=kb, 
+                    parse_mode="HTML",
+                    disable_web_page_preview=True
+                )
+                logger.info(f"✅ Topildi va yuborildi: {found}")
+            except Exception as send_error:
+                # Agar hali ham xato bersa, tugmasiz oddiy matn yuborishga harakat qiladi
+                await bot.send_message(chat_id=PERSONAL_GROUP_ID, text=report, parse_mode="HTML")
+                logger.error(f"⚠️ Yuborishda xatolik (lekin yuborildi): {send_error}")
 
     except Exception as e:
-        logger.error(f"Xatolik: {e}")
+        logger.error(f"❌ Userbot handler xatosi: {e}")
 
+# --- ISHGA TUSHIRISH ---
 async def main():
     init_db()
+    logger.info("Botlar ishga tushmoqda...")
     await client.start()
     await asyncio.gather(dp.start_polling(bot), client.run_until_disconnected())
 
 if __name__ == '__main__':
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except (KeyboardInterrupt, SystemExit):
+        logger.info("🛑 To'xtatildi")
