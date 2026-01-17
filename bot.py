@@ -441,21 +441,11 @@ async def handle_new_message(event):
     except Exception as e:
         logger.error(f"Xatolik yuz berdi: {e}")
 
-async def start_userbot():
-    await client.start(phone=PHONE_NUMBER)
-    logger.info("Userbot muvaffaqiyatli ishga tushdi!")
-    
-    search_groups = db.get_search_groups()
-    logger.info(f"Izlovchi guruhlar soni: {len(search_groups)}")
-    
-    for gid, group_id, group_name in search_groups:
-        logger.info(f"Kuzatilayotgan guruh: {group_name} ({group_id})")
-
 # ============================================
 # ASOSIY FUNKSIYA
 # ============================================
 async def main():
-    # Botni ishga tushirish
+    # Bot application
     bot_app = Application.builder().token(BOT_TOKEN).build()
     bot_app.add_handler(CommandHandler("start", start))
     bot_app.add_handler(CommandHandler("cancel", cancel))
@@ -465,17 +455,25 @@ async def main():
     logger.info("Bot va Userbot ishga tushirilmoqda...")
     
     # Userbotni ishga tushirish
-    await start_userbot()
+    await client.start(phone=PHONE_NUMBER)
+    logger.info("Userbot muvaffaqiyatli ishga tushdi!")
     
-    # Botni ishga tushirish (background)
-    await bot_app.initialize()
-    await bot_app.start()
+    search_groups = db.get_search_groups()
+    logger.info(f"Izlovchi guruhlar soni: {len(search_groups)}")
     
-    # Ikkalasini parallel ravishda ishlatish
-    await asyncio.gather(
-        bot_app.updater.start_polling(allowed_updates=Update.ALL_TYPES),
-        client.run_until_disconnected()
-    )
+    for gid, group_id, group_name in search_groups:
+        logger.info(f"Kuzatilayotgan guruh: {group_name} ({group_id})")
+    
+    # Botni parallel ravishda ishga tushirish
+    async with bot_app:
+        await bot_app.start()
+        logger.info("Bot muvaffaqiyatli ishga tushdi!")
+        
+        # Ikkalasini parallel ishlash
+        await asyncio.gather(
+            bot_app.updater.start_polling(allowed_updates=Update.ALL_TYPES),
+            client.run_until_disconnected()
+        )
 
 if __name__ == '__main__':
     try:
