@@ -338,6 +338,8 @@ async def userbot_main():
     await client.start()
     logger.info("✅ Userbot ishga tushdi")
     
+    logger.info(f"✅ Userbot {client.get_me()} sifatida ulandi")
+    
     @client.on(events.NewMessage())
     async def handler(event):
         try:
