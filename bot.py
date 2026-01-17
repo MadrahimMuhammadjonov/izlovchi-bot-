@@ -2,6 +2,7 @@ import asyncio
 import sqlite3
 import logging
 from telethon import TelegramClient, events
+from telethon.sessions import StringSession
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
@@ -16,6 +17,10 @@ SESSION_STRING = "1ApWapzMBu7wMtDnHS2BHSlKKIcR0O326szif2GpPek9MHzgLxHaafUzSGh864
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
+
+# Global bot
+bot = Bot(token=BOT_TOKEN)
+dp = Dispatcher()
 
 # Database yaratish
 def init_db():
@@ -146,10 +151,6 @@ def main_menu_keyboard():
         [InlineKeyboardButton(text="🗑 Shaxsiy guruhni o'chirish", callback_data='delete_personal_group')]
     ]
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
-
-# Global bot
-bot = Bot(token=BOT_TOKEN)
-dp = Dispatcher()
 
 # Bot handlerlari
 @dp.message(Command("start"))
@@ -333,64 +334,68 @@ async def message_handler(message: types.Message):
 
 # Userbot funksiyalari
 async def userbot_main():
-    # Session string dan foydalanish
-    client = TelegramClient(StringSession(SESSION_STRING), API_ID, API_HASH)
-    await client.start()
-    logger.info("✅ Userbot ishga tushdi")
-    
-    logger.info(f"✅ Userbot {client.get_me()} sifatida ulandi")
-    
-    @client.on(events.NewMessage())
-    async def handler(event):
-        try:
-            chat = await event.get_chat()
-            chat_id = event.chat_id
-            
-            search_groups = get_search_groups()
-            group_ids = [g[0] for g in search_groups]
-            
-            if chat_id not in group_ids:
-                return
-            
-            message_text = event.message.message
-            if not message_text:
-                return
-            
-            keywords = get_keywords()
-            found_keywords = [kw for kw in keywords if kw.lower() in message_text.lower()]
-            
-            if not found_keywords:
-                return
-            
-            personal_group = get_personal_group()
-            if not personal_group:
-                return
-            
-            sender = await event.get_sender()
-            sender_name = f"{sender.first_name or ''} {sender.last_name or ''}".strip()
-            sender_username = f"@{sender.username}" if sender.username else "Username yo'q"
-            sender_id = sender.id
-            
-            group_name = chat.title if hasattr(chat, 'title') else "Noma'lum guruh"
-            
-            notification = f"🔍 Yangi kalit so'z topildi!\n\n"
-            notification += f"📍 Guruh: {group_name}\n"
-            notification += f"👤 Foydalanuvchi: {sender_name} ({sender_username})\n"
-            notification += f"🔑 Kalit so'z(lar): {', '.join(found_keywords)}\n\n"
-            notification += f"💬 Xabar:\n{message_text}"
-            
-            keyboard = [[InlineKeyboardButton(text="👤 Profilga o'tish", url=f"tg://user?id={sender_id}")]]
-            
-            await bot.send_message(
-                chat_id=personal_group[0],
-                text=notification,
-                reply_markup=InlineKeyboardMarkup(inline_keyboard=keyboard)
-            )
-            logger.info(f"✅ Xabar yuborildi: {found_keywords}")
-        except Exception as e:
-            logger.error(f"Userbot xatosi: {e}")
-    
-    await client.run_until_disconnected()
+    try:
+        # Session string dan foydalanish
+        client = TelegramClient(StringSession(SESSION_STRING), API_ID, API_HASH)
+        await client.start()
+        
+        # Userbot ma'lumotlarini olish
+        me = await client.get_me()
+        logger.info(f"✅ Userbot @{me.username} sifatida ulandi")
+        
+        @client.on(events.NewMessage())
+        async def handler(event):
+            try:
+                chat = await event.get_chat()
+                chat_id = event.chat_id
+                
+                search_groups = get_search_groups()
+                group_ids = [g[0] for g in search_groups]
+                
+                if chat_id not in group_ids:
+                    return
+                
+                message_text = event.message.message
+                if not message_text:
+                    return
+                
+                keywords = get_keywords()
+                found_keywords = [kw for kw in keywords if kw.lower() in message_text.lower()]
+                
+                if not found_keywords:
+                    return
+                
+                personal_group = get_personal_group()
+                if not personal_group:
+                    return
+                
+                sender = await event.get_sender()
+                sender_name = f"{sender.first_name or ''} {sender.last_name or ''}".strip()
+                sender_username = f"@{sender.username}" if sender.username else "Username yo'q"
+                sender_id = sender.id
+                
+                group_name = chat.title if hasattr(chat, 'title') else "Noma'lum guruh"
+                
+                notification = f"🔍 Yangi kalit so'z topildi!\n\n"
+                notification += f"📍 Guruh: {group_name}\n"
+                notification += f"👤 Foydalanuvchi: {sender_name} ({sender_username})\n"
+                notification += f"🔑 Kalit so'z(lar): {', '.join(found_keywords)}\n\n"
+                notification += f"💬 Xabar:\n{message_text}"
+                
+                keyboard = [[InlineKeyboardButton(text="👤 Profilga o'tish", url=f"tg://user?id={sender_id}")]]
+                
+                await bot.send_message(
+                    chat_id=personal_group[0],
+                    text=notification,
+                    reply_markup=InlineKeyboardMarkup(inline_keyboard=keyboard)
+                )
+                logger.info(f"✅ Xabar yuborildi: {found_keywords}")
+            except Exception as e:
+                logger.error(f"Userbot handler xatosi: {e}")
+        
+        await client.run_until_disconnected()
+    except Exception as e:
+        logger.error(f"Userbot xatosi: {e}")
 
 async def check_pending_groups():
     while True:
