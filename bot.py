@@ -164,6 +164,44 @@ async def start_handler(message: types.Message):
     else:
         await message.answer("❌ Kechirasiz, ushbu botdan faqat adminlar foydalana oladi.")
 
+@dp.message(Command("status"))
+async def status_handler(message: types.Message):
+    if message.from_user.id != ADMIN_ID:
+        return
+    
+    keywords = get_keywords()
+    search_groups = get_search_groups()
+    personal_group = get_personal_group()
+    
+    status_text = "📊 Bot holati:\n\n"
+    status_text += f"🔑 Kalit so'zlar: {len(keywords)} ta\n"
+    status_text += f"📋 Izlovchi guruhlar: {len(search_groups)} ta\n"
+    status_text += f"💼 Shaxsiy guruh: {'✅ O\'rnatilgan' if personal_group else '❌ O\'rnatilmagan'}\n\n"
+    
+    if keywords:
+        status_text += "Kalit so'zlar:\n" + "\n".join([f"• {kw}" for kw in keywords[:5]])
+        if len(keywords) > 5:
+            status_text += f"\n...va yana {len(keywords) - 5} ta"
+    
+    await message.answer(status_text)
+
+@dp.message(Command("test"))
+async def test_handler(message: types.Message):
+    if message.from_user.id != ADMIN_ID:
+        return
+    
+    personal_group = get_personal_group()
+    if not personal_group:
+        await message.answer("❌ Avval shaxsiy guruh o'rnating!")
+        return
+    
+    try:
+        test_msg = "🧪 Test xabari - Bot ishlayapti!"
+        await bot.send_message(chat_id=personal_group[0], text=test_msg)
+        await message.answer("✅ Test xabari yuborildi! Shaxsiy guruhni tekshiring.")
+    except Exception as e:
+        await message.answer(f"❌ Xatolik: {str(e)}")
+
 @dp.callback_query(F.data == "add_keyword")
 async def add_keyword_handler(callback: types.CallbackQuery):
     if callback.from_user.id != ADMIN_ID:
@@ -349,25 +387,41 @@ async def userbot_main():
                 chat = await event.get_chat()
                 chat_id = event.chat_id
                 
+                logger.info(f"📨 Yangi xabar: chat_id={chat_id}")
+                
                 search_groups = get_search_groups()
                 group_ids = [g[0] for g in search_groups]
                 
+                logger.info(f"🔍 Izlovchi guruhlar: {group_ids}")
+                
                 if chat_id not in group_ids:
+                    logger.info(f"⏭️ Guruh izlovchilar ro'yxatida emas: {chat_id}")
                     return
                 
                 message_text = event.message.message
                 if not message_text:
+                    logger.info("⏭️ Xabar matni yo'q")
                     return
                 
+                logger.info(f"💬 Xabar matni: {message_text[:50]}")
+                
                 keywords = get_keywords()
+                logger.info(f"🔑 Kalit so'zlar: {keywords}")
+                
                 found_keywords = [kw for kw in keywords if kw.lower() in message_text.lower()]
                 
                 if not found_keywords:
+                    logger.info("⏭️ Kalit so'z topilmadi")
                     return
+                
+                logger.info(f"✅ Topilgan kalit so'zlar: {found_keywords}")
                 
                 personal_group = get_personal_group()
                 if not personal_group:
+                    logger.warning("⚠️ Shaxsiy guruh o'rnatilmagan!")
                     return
+                
+                logger.info(f"📍 Shaxsiy guruh: {personal_group}")
                 
                 sender = await event.get_sender()
                 sender_name = f"{sender.first_name or ''} {sender.last_name or ''}".strip()
@@ -389,9 +443,9 @@ async def userbot_main():
                     text=notification,
                     reply_markup=InlineKeyboardMarkup(inline_keyboard=keyboard)
                 )
-                logger.info(f"✅ Xabar yuborildi: {found_keywords}")
+                logger.info(f"✅ Xabar yuborildi shaxsiy guruhga! Kalit so'zlar: {found_keywords}")
             except Exception as e:
-                logger.error(f"Userbot handler xatosi: {e}")
+                logger.error(f"❌ Userbot handler xatosi: {e}", exc_info=True)
         
         await client.run_until_disconnected()
     except Exception as e:
