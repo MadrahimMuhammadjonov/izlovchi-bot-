@@ -1,201 +1,324 @@
-import asyncio
 import logging
-from aiogram import Bot, Dispatcher, types, F
-from aiogram.filters import Command
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton
-from aiogram.fsm.context import FSMContext
-from aiogram.fsm.state import State, StatesGroup
-from database import db
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, ContextTypes, filters
+from database import Database
 
-# Ma'lumotlar
+# Konfiguratsiya
 BOT_TOKEN = "8045123024:AAGdfjgOJAUosbf4SfUpmDQkh2qeGOirblc"
 ADMIN_ID = 8228479175
 
-bot = Bot(token=BOT_TOKEN)
-dp = Dispatcher()
+# Logging sozlash
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    level=logging.INFO
+)
+logger = logging.getLogger(__name__)
 
-class Form(StatesGroup):
-    waiting_for_keyword = State()
-    waiting_for_search_group = State()
-    waiting_for_private_group = State()
+# Database
+db = Database()
 
-def get_admin_keyboard():
+# Holatlar
+WAITING_KEYWORD = "waiting_keyword"
+WAITING_SEARCH_GROUP = "waiting_search_group"
+WAITING_PERSONAL_GROUP = "waiting_personal_group"
+
+def get_main_menu():
+    """Asosiy menyu klaviaturasini yaratish"""
     keyboard = [
-        [KeyboardButton(text="1. Kalit soz qoshish"), KeyboardButton(text="2. kalit so'zlarni korish")],
-        [KeyboardButton(text="3. kalit so'zlarni ochirish"), KeyboardButton(text="4. izlovchi guruh qoshish")],
-        [KeyboardButton(text="5. izlovchi guruhlarni korish"), KeyboardButton(text="6. izlovchi guruhni ochirish")],
-        [KeyboardButton(text="7. shaxsiy guruh qoshish"), KeyboardButton(text="8. shaxsiy guruhni ko'rish")],
-        [KeyboardButton(text="9. shaxsiy guruxni ochirish")]
+        [InlineKeyboardButton("➕ Kalit so'z qo'shish", callback_data='add_keyword')],
+        [InlineKeyboardButton("📋 Kalit so'zlarni ko'rish", callback_data='view_keywords')],
+        [InlineKeyboardButton("🗑 Kalit so'zlarni o'chirish", callback_data='delete_keyword')],
+        [InlineKeyboardButton("➕ Izlovchi guruh qo'shish", callback_data='add_search_group')],
+        [InlineKeyboardButton("📋 Izlovchi guruhlarni ko'rish", callback_data='view_search_groups')],
+        [InlineKeyboardButton("🗑 Izlovchi guruhni o'chirish", callback_data='delete_search_group')],
+        [InlineKeyboardButton("➕ Shaxsiy guruh qo'shish", callback_data='add_personal_group')],
+        [InlineKeyboardButton("📋 Shaxsiy guruhni ko'rish", callback_data='view_personal_group')],
+        [InlineKeyboardButton("🗑 Shaxsiy guruhni o'chirish", callback_data='delete_personal_group')],
     ]
-    return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)
+    return InlineKeyboardMarkup(keyboard)
 
-@dp.message(Command("start"))
-async def start_handler(message: types.Message):
-    if message.from_user.id == ADMIN_ID:
-        await message.answer(f"Salom Admin! Xush kelibsiz.\nQuyidagi menyudan foydalaning:", reply_markup=get_admin_keyboard())
-    else:
-        await message.answer("Salom! Ushbu botdan faqat adminlar foydalana oladi.")
-
-# 1. Kalit soz qoshish
-@dp.message(F.text == "1. Kalit soz qoshish")
-async def add_keyword_start(message: types.Message, state: FSMContext):
-    if message.from_user.id != ADMIN_ID: return
-    await message.answer("Yangi kalit soz kiriting:")
-    await state.set_state(Form.waiting_for_keyword)
-
-@dp.message(Form.waiting_for_keyword)
-async def process_keyword(message: types.Message, state: FSMContext):
-    if db.add_keyword(message.text):
-        await message.answer(f"Kalit so'z '{message.text}' muvaffaqiyatli qo'shildi.")
-    else:
-        await message.answer("Ushbu kalit so'z allaqachon mavjud.")
-    await state.clear()
-
-# 2. Kalit so'zlarni ko'rish
-@dp.message(F.text == "2. kalit so'zlarni korish")
-async def view_keywords(message: types.Message):
-    if message.from_user.id != ADMIN_ID: return
-    keywords = db.get_keywords()
-    if not keywords:
-        await message.answer("Hozircha kalit so'zlar yo'q.")
-        return
-    text = "Kalit so'zlar ro'yxati:\n"
-    for k in keywords:
-        text += f"- {k[1]}\n"
-    await message.answer(text)
-
-# 3. Kalit so'zlarni o'chirish
-@dp.message(F.text == "3. kalit so'zlarni ochirish")
-async def delete_keyword_list(message: types.Message):
-    if message.from_user.id != ADMIN_ID: return
-    keywords = db.get_keywords()
-    if not keywords:
-        await message.answer("O'chirish uchun kalit so'zlar yo'q.")
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Start komandasi"""
+    user_id = update.effective_user.id
+    
+    if user_id != ADMIN_ID:
+        await update.message.reply_text(
+            "👋 Assalomu alaykum!\n\n"
+            "⚠️ Ushbu botdan faqat adminlar foydalana oladi."
+        )
         return
     
-    builder = []
-    for k in keywords:
-        builder.append([InlineKeyboardButton(text=k[1], callback_data=f"del_key_{k[0]}")])
+    await update.message.reply_text(
+        "👋 Assalomu alaykum, Admin!\n\n"
+        "Quyidagi menyudan kerakli bo'limni tanlang:",
+        reply_markup=get_main_menu()
+    )
+
+async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Tugmalar bosilganda ishlaydigan handler"""
+    query = update.callback_query
+    await query.answer()
     
-    keyboard = InlineKeyboardMarkup(inline_keyboard=builder)
-    await message.answer("O'chirmoqchi bo'lgan kalit so'zingizni tanlang:", reply_markup=keyboard)
-
-@dp.callback_query(F.data.startswith("del_key_"))
-async def process_delete_keyword(callback: types.CallbackQuery):
-    key_id = int(callback.data.split("_")[2])
-    db.delete_keyword(key_id)
-    await callback.answer("Kalit so'z o'chirildi.")
-    await callback.message.edit_text("Kalit so'z muvaffaqiyatli o'chirildi.")
-
-# 4. Izlovchi guruh qo'shish
-@dp.message(F.text == "4. izlovchi guruh qoshish")
-async def add_search_group_start(message: types.Message, state: FSMContext):
-    if message.from_user.id != ADMIN_ID: return
-    await message.answer("Izlovchi guruh ID yoki havolasini yuboring:")
-    await state.set_state(Form.waiting_for_search_group)
-
-@dp.message(Form.waiting_for_search_group)
-async def process_search_group(message: types.Message, state: FSMContext):
-    # Bu yerda guruhni tekshirish va nomini olish userbot orqali bo'lishi kerak, 
-    # lekin hozircha oddiygina saqlaymiz. Userbot ishga tushganda guruhga qo'shiladi.
-    group_input = message.text
-    if db.add_search_group(group_input, f"Guruh: {group_input}"):
-        await message.answer(f"Izlovchi guruh '{group_input}' qo'shildi.")
-    else:
-        await message.answer("Ushbu guruh allaqachon mavjud.")
-    await state.clear()
-
-# 5. Izlovchi guruhlarni ko'rish
-@dp.message(F.text == "5. izlovchi guruhlarni korish")
-async def view_search_groups(message: types.Message):
-    if message.from_user.id != ADMIN_ID: return
-    groups = db.get_search_groups()
-    if not groups:
-        await message.answer("Izlovchi guruhlar yo'q.")
-        return
-    text = "Izlovchi guruhlar:\n"
-    for g in groups:
-        text += f"- {g[2]} (ID: {g[1]})\n"
-    await message.answer(text)
-
-# 6. Izlovchi guruhni o'chirish
-@dp.message(F.text == "6. izlovchi guruhni ochirish")
-async def delete_search_group_list(message: types.Message):
-    if message.from_user.id != ADMIN_ID: return
-    groups = db.get_search_groups()
-    if not groups:
-        await message.answer("O'chirish uchun guruhlar yo'q.")
+    user_id = query.from_user.id
+    if user_id != ADMIN_ID:
         return
     
-    builder = []
-    for g in groups:
-        builder.append([InlineKeyboardButton(text=g[2], callback_data=f"del_sg_{g[1]}")])
+    data = query.data
     
-    keyboard = InlineKeyboardMarkup(inline_keyboard=builder)
-    await message.answer("O'chirmoqchi bo'lgan izlovchi guruhni tanlang:", reply_markup=keyboard)
+    # Kalit so'z qo'shish
+    if data == 'add_keyword':
+        context.user_data['state'] = WAITING_KEYWORD
+        await query.edit_message_text(
+            "📝 Yangi kalit so'z kiriting:\n\n"
+            "Bekor qilish uchun /cancel yuboring"
+        )
+    
+    # Kalit so'zlarni ko'rish
+    elif data == 'view_keywords':
+        keywords = db.get_keywords()
+        if keywords:
+            text = "📋 Kalit so'zlar ro'yxati:\n\n"
+            for idx, (kid, keyword) in enumerate(keywords, 1):
+                text += f"{idx}. {keyword}\n"
+        else:
+            text = "❌ Hozircha kalit so'zlar yo'q"
+        
+        keyboard = [[InlineKeyboardButton("🔙 Orqaga", callback_data='back_to_menu')]]
+        await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
+    
+    # Kalit so'zlarni o'chirish
+    elif data == 'delete_keyword':
+        keywords = db.get_keywords()
+        if keywords:
+            keyboard = []
+            for kid, keyword in keywords:
+                keyboard.append([InlineKeyboardButton(f"🗑 {keyword}", callback_data=f'del_kw_{kid}')])
+            keyboard.append([InlineKeyboardButton("🔙 Orqaga", callback_data='back_to_menu')])
+            await query.edit_message_text(
+                "O'chirish uchun kalit so'zni tanlang:",
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
+        else:
+            await query.edit_message_text(
+                "❌ Hozircha kalit so'zlar yo'q",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Orqaga", callback_data='back_to_menu')]])
+            )
+    
+    # Kalit so'zni o'chirish (tasdiqlash)
+    elif data.startswith('del_kw_'):
+        keyword_id = int(data.split('_')[2])
+        db.delete_keyword(keyword_id)
+        await query.edit_message_text(
+            "✅ Kalit so'z o'chirildi!",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Orqaga", callback_data='back_to_menu')]])
+        )
+    
+    # Izlovchi guruh qo'shish
+    elif data == 'add_search_group':
+        context.user_data['state'] = WAITING_SEARCH_GROUP
+        await query.edit_message_text(
+            "📝 Izlovchi guruh ID yoki havolasini yuboring:\n\n"
+            "Bekor qilish uchun /cancel yuboring"
+        )
+    
+    # Izlovchi guruhlarni ko'rish
+    elif data == 'view_search_groups':
+        groups = db.get_search_groups()
+        if groups:
+            text = "📋 Izlovchi guruhlar ro'yxati:\n\n"
+            for idx, (gid, group_id, group_name) in enumerate(groups, 1):
+                text += f"{idx}. {group_name}\n"
+        else:
+            text = "❌ Hozircha izlovchi guruhlar yo'q"
+        
+        keyboard = [[InlineKeyboardButton("🔙 Orqaga", callback_data='back_to_menu')]]
+        await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
+    
+    # Izlovchi guruhlarni o'chirish
+    elif data == 'delete_search_group':
+        groups = db.get_search_groups()
+        if groups:
+            keyboard = []
+            for gid, group_id, group_name in groups:
+                keyboard.append([InlineKeyboardButton(f"🗑 {group_name}", callback_data=f'del_sg_{gid}')])
+            keyboard.append([InlineKeyboardButton("🔙 Orqaga", callback_data='back_to_menu')])
+            await query.edit_message_text(
+                "O'chirish uchun guruhni tanlang:",
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
+        else:
+            await query.edit_message_text(
+                "❌ Hozircha izlovchi guruhlar yo'q",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Orqaga", callback_data='back_to_menu')]])
+            )
+    
+    # Izlovchi guruhni o'chirish (tasdiqlash)
+    elif data.startswith('del_sg_'):
+        group_id = int(data.split('_')[2])
+        db.delete_search_group(group_id)
+        await query.edit_message_text(
+            "✅ Izlovchi guruh o'chirildi!",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Orqaga", callback_data='back_to_menu')]])
+        )
+    
+    # Shaxsiy guruh qo'shish
+    elif data == 'add_personal_group':
+        context.user_data['state'] = WAITING_PERSONAL_GROUP
+        await query.edit_message_text(
+            "📝 Shaxsiy guruh ID yoki havolasini yuboring:\n\n"
+            "Bekor qilish uchun /cancel yuboring"
+        )
+    
+    # Shaxsiy guruhni ko'rish
+    elif data == 'view_personal_group':
+        group = db.get_personal_group()
+        if group:
+            text = f"📋 Shaxsiy guruh:\n\n{group[1]}"
+        else:
+            text = "❌ Shaxsiy guruh o'rnatilmagan"
+        
+        keyboard = [[InlineKeyboardButton("🔙 Orqaga", callback_data='back_to_menu')]]
+        await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
+    
+    # Shaxsiy guruhni o'chirish
+    elif data == 'delete_personal_group':
+        db.delete_personal_group()
+        await query.edit_message_text(
+            "✅ Shaxsiy guruh o'chirildi!",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Orqaga", callback_data='back_to_menu')]])
+        )
+    
+    # Orqaga qaytish
+    elif data == 'back_to_menu':
+        await query.edit_message_text(
+            "👋 Assalomu alaykum, Admin!\n\n"
+            "Quyidagi menyudan kerakli bo'limni tanlang:",
+            reply_markup=get_main_menu()
+        )
 
-@dp.callback_query(F.data.startswith("del_sg_"))
-async def process_delete_sg(callback: types.CallbackQuery):
-    group_id = callback.data.replace("del_sg_", "")
-    db.delete_search_group(group_id)
-    await callback.answer("Guruh o'chirildi.")
-    await callback.message.edit_text("Izlovchi guruh muvaffaqiyatli o'chirildi.")
-
-# 7. Shaxsiy guruh qo'shish
-@dp.message(F.text == "7. shaxsiy guruh qoshish")
-async def add_private_group_start(message: types.Message, state: FSMContext):
-    if message.from_user.id != ADMIN_ID: return
-    await message.answer("Shaxsiy guruh ID yoki havolasini yuboring:")
-    await state.set_state(Form.waiting_for_private_group)
-
-@dp.message(Form.waiting_for_private_group)
-async def process_private_group(message: types.Message, state: FSMContext):
-    group_input = message.text
-    if db.add_private_group(group_input, f"Shaxsiy: {group_input}"):
-        await message.answer(f"Shaxsiy guruh '{group_input}' qo'shildi.")
-    else:
-        await message.answer("Ushbu shaxsiy guruh allaqachon mavjud.")
-    await state.clear()
-
-# 8. Shaxsiy guruhni ko'rish
-@dp.message(F.text == "8. shaxsiy guruhni ko'rish")
-async def view_private_groups(message: types.Message):
-    if message.from_user.id != ADMIN_ID: return
-    groups = db.get_private_groups()
-    if not groups:
-        await message.answer("Shaxsiy guruhlar yo'q.")
+async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Xabarlarni qayta ishlash"""
+    user_id = update.effective_user.id
+    
+    if user_id != ADMIN_ID:
         return
-    text = "Shaxsiy guruhlar:\n"
-    for g in groups:
-        text += f"- {g[2]} (ID: {g[1]})\n"
-    await message.answer(text)
+    
+    state = context.user_data.get('state')
+    text = update.message.text
+    
+    # Kalit so'z qo'shish
+    if state == WAITING_KEYWORD:
+        if db.add_keyword(text):
+            await update.message.reply_text(
+                f"✅ Kalit so'z qo'shildi: {text}",
+                reply_markup=get_main_menu()
+            )
+        else:
+            await update.message.reply_text(
+                "❌ Bu kalit so'z allaqachon mavjud!",
+                reply_markup=get_main_menu()
+            )
+        context.user_data['state'] = None
+    
+    # Izlovchi guruh qo'shish
+    elif state == WAITING_SEARCH_GROUP:
+        try:
+            # Guruh ID yoki havolani aniqlash
+            if text.startswith('https://t.me/') or text.startswith('@'):
+                group_identifier = text
+            else:
+                group_identifier = int(text)
+            
+            # Guruh ma'lumotlarini olish
+            try:
+                chat = await context.bot.get_chat(group_identifier)
+                group_id = chat.id
+                group_name = chat.title or chat.username or str(group_id)
+                
+                if db.add_search_group(group_id, group_name):
+                    await update.message.reply_text(
+                        f"✅ Izlovchi guruh qo'shildi: {group_name}",
+                        reply_markup=get_main_menu()
+                    )
+                else:
+                    await update.message.reply_text(
+                        "❌ Bu guruh allaqachon mavjud!",
+                        reply_markup=get_main_menu()
+                    )
+            except Exception as e:
+                await update.message.reply_text(
+                    f"❌ Guruhni topib bo'lmadi. Botni guruhga qo'shganingizga ishonch hosil qiling.\nXatolik: {str(e)}",
+                    reply_markup=get_main_menu()
+                )
+        except ValueError:
+            await update.message.reply_text(
+                "❌ Noto'g'ri format! Guruh ID yoki havolasini yuboring.",
+                reply_markup=get_main_menu()
+            )
+        context.user_data['state'] = None
+    
+    # Shaxsiy guruh qo'shish
+    elif state == WAITING_PERSONAL_GROUP:
+        try:
+            # Guruh ID yoki havolani aniqlash
+            if text.startswith('https://t.me/') or text.startswith('@'):
+                group_identifier = text
+            else:
+                group_identifier = int(text)
+            
+            # Guruh ma'lumotlarini olish
+            try:
+                chat = await context.bot.get_chat(group_identifier)
+                group_id = chat.id
+                group_name = chat.title or chat.username or str(group_id)
+                
+                if db.add_personal_group(group_id, group_name):
+                    await update.message.reply_text(
+                        f"✅ Shaxsiy guruh o'rnatildi: {group_name}",
+                        reply_markup=get_main_menu()
+                    )
+                else:
+                    await update.message.reply_text(
+                        "❌ Xatolik yuz berdi!",
+                        reply_markup=get_main_menu()
+                    )
+            except Exception as e:
+                await update.message.reply_text(
+                    f"❌ Guruhni topib bo'lmadi. Botni guruhga qo'shganingizga ishonch hosil qiling.\nXatolik: {str(e)}",
+                    reply_markup=get_main_menu()
+                )
+        except ValueError:
+            await update.message.reply_text(
+                "❌ Noto'g'ri format! Guruh ID yoki havolasini yuboring.",
+                reply_markup=get_main_menu()
+            )
+        context.user_data['state'] = None
 
-# 9. Shaxsiy guruhni o'chirish
-@dp.message(F.text == "9. shaxsiy guruxni ochirish")
-async def delete_private_group_list(message: types.Message):
-    if message.from_user.id != ADMIN_ID: return
-    groups = db.get_private_groups()
-    if not groups:
-        await message.answer("O'chirish uchun shaxsiy guruhlar yo'q.")
+async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Bekor qilish"""
+    user_id = update.effective_user.id
+    if user_id != ADMIN_ID:
         return
     
-    builder = []
-    for g in groups:
-        builder.append([InlineKeyboardButton(text=g[2], callback_data=f"del_pg_{g[1]}")])
+    context.user_data['state'] = None
+    await update.message.reply_text(
+        "❌ Bekor qilindi",
+        reply_markup=get_main_menu()
+    )
+
+def main():
+    """Botni ishga tushirish"""
+    application = Application.builder().token(BOT_TOKEN).build()
     
-    keyboard = InlineKeyboardMarkup(inline_keyboard=builder)
-    await message.answer("O'chirmoqchi bo'lgan shaxsiy guruhni tanlang:", reply_markup=keyboard)
+    # Handlerlar
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("cancel", cancel))
+    application.add_handler(CallbackQueryHandler(button_handler))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
+    
+    # Botni ishga tushirish
+    logger.info("Bot ishga tushirildi...")
+    application.run_polling(allowed_updates=Update.ALL_TYPES)
 
-@dp.callback_query(F.data.startswith("del_pg_"))
-async def process_delete_pg(callback: types.CallbackQuery):
-    group_id = callback.data.replace("del_pg_", "")
-    db.delete_private_group(group_id)
-    await callback.answer("Shaxsiy guruh o'chirildi.")
-    await callback.message.edit_text("Shaxsiy guruh muvaffaqiyatli o'chirildi.")
-
-async def main():
-    logging.basicConfig(level=logging.INFO)
-    await dp.start_polling(bot)
-
-if __name__ == "__main__":
-    asyncio.run(main())
+if __name__ == '__main__':
+    main()
