@@ -76,29 +76,43 @@ async def userbot_handler(event):
             sender = await event.get_sender()
             chat = await event.get_chat()
             
-            # Profilga o'tish havolasini tayyorlash
-            # Agar username bo'lsa t.me havolasi, bo'lmasa tg://user?id havolasi
-            if sender.username:
-                p_url = f"https://t.me/{sender.username}"
-            else:
-                p_url = f"tg://user?id={sender.id}"
-
+            # Xabarni forward qilish orqali profilga link yaratish
             s_name = html.escape(f"{sender.first_name or ''} {sender.last_name or ''}".strip() or "Foydalanuvchi")
             g_name = html.escape(getattr(chat, 'title', 'Guruh'))
             msg_text = html.escape(text[:800])
 
+            # User ID ni olish
+            user_id = sender.id
+
             report = (
                 f"🔍 <b>Kalit so'z topildi:</b> {', '.join(found)}\n"
                 f"<b>📍 Guruh:</b> {g_name}\n"
-                f"<b>👤 Foydalanuvchi:</b> {s_name}\n\n"
+                f"<b>👤 Foydalanuvchi:</b> {s_name}\n"
+                f"<b>🆔 ID:</b> <code>{user_id}</code>\n\n"
                 f"<b>📝 Xabar:</b>\n<i>{msg_text}</i>"
             )
 
-            # PROFILGA O'TISH TUGMASI
-            kb = InlineKeyboardMarkup(inline_keyboard=[[
-                InlineKeyboardButton(text="👤 Profilga o'tish", url=p_url)
-            ]])
+            # Username bo'lsa t.me link, bo'lmasa tg://openmessage link
+            keyboard_buttons = []
+            
+            if sender.username:
+                # Username mavjud bo'lsa
+                p_url = f"https://t.me/{sender.username}"
+                keyboard_buttons.append([
+                    InlineKeyboardButton(text="👤 Profilga o'tish", url=p_url)
+                ])
+            else:
+                # Username yo'q bo'lsa - mention orqali
+                keyboard_buttons.append([
+                    InlineKeyboardButton(
+                        text="👤 Profilga o'tish", 
+                        url=f"tg://openmessage?user_id={user_id}"
+                    )
+                ])
 
+            kb = InlineKeyboardMarkup(inline_keyboard=keyboard_buttons)
+
+            # Xabarni yuborish
             await bot.send_message(
                 chat_id=PERSONAL_GROUP_ID,
                 text=report,
@@ -107,7 +121,7 @@ async def userbot_handler(event):
             )
 
     except Exception as e:
-        logger.error(f"Xatolik: {e}")
+        logger.error(f"Xatolik userbot_handler: {e}")
 
 # --- ADMIN PANEL HANDLERLARI ---
 @dp.message(Command("start"))
