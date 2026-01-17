@@ -68,7 +68,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     data = query.data
     
-    # Kalit so'z qo'shish
     if data == 'add_keyword':
         context.user_data['state'] = WAITING_KEYWORD
         await query.edit_message_text(
@@ -76,7 +75,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "Bekor qilish uchun /cancel yuboring"
         )
     
-    # Kalit so'zlarni ko'rish
     elif data == 'view_keywords':
         keywords = db.get_keywords()
         if keywords:
@@ -89,7 +87,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         keyboard = [[InlineKeyboardButton("🔙 Orqaga", callback_data='back_to_menu')]]
         await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
     
-    # Kalit so'zlarni o'chirish
     elif data == 'delete_keyword':
         keywords = db.get_keywords()
         if keywords:
@@ -107,7 +104,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Orqaga", callback_data='back_to_menu')]])
             )
     
-    # Kalit so'zni o'chirish (tasdiqlash)
     elif data.startswith('del_kw_'):
         keyword_id = int(data.split('_')[2])
         db.delete_keyword(keyword_id)
@@ -116,7 +112,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Orqaga", callback_data='back_to_menu')]])
         )
     
-    # Izlovchi guruh qo'shish
     elif data == 'add_search_group':
         context.user_data['state'] = WAITING_SEARCH_GROUP
         await query.edit_message_text(
@@ -124,7 +119,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "Bekor qilish uchun /cancel yuboring"
         )
     
-    # Izlovchi guruhlarni ko'rish
     elif data == 'view_search_groups':
         groups = db.get_search_groups()
         if groups:
@@ -137,7 +131,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         keyboard = [[InlineKeyboardButton("🔙 Orqaga", callback_data='back_to_menu')]]
         await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
     
-    # Izlovchi guruhlarni o'chirish
     elif data == 'delete_search_group':
         groups = db.get_search_groups()
         if groups:
@@ -155,7 +148,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Orqaga", callback_data='back_to_menu')]])
             )
     
-    # Izlovchi guruhni o'chirish (tasdiqlash)
     elif data.startswith('del_sg_'):
         group_id = int(data.split('_')[2])
         db.delete_search_group(group_id)
@@ -164,7 +156,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Orqaga", callback_data='back_to_menu')]])
         )
     
-    # Shaxsiy guruh qo'shish
     elif data == 'add_personal_group':
         context.user_data['state'] = WAITING_PERSONAL_GROUP
         await query.edit_message_text(
@@ -172,7 +163,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "Bekor qilish uchun /cancel yuboring"
         )
     
-    # Shaxsiy guruhni ko'rish
     elif data == 'view_personal_group':
         group = db.get_personal_group()
         if group:
@@ -183,7 +173,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         keyboard = [[InlineKeyboardButton("🔙 Orqaga", callback_data='back_to_menu')]]
         await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
     
-    # Shaxsiy guruhni o'chirish
     elif data == 'delete_personal_group':
         db.delete_personal_group()
         await query.edit_message_text(
@@ -191,7 +180,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Orqaga", callback_data='back_to_menu')]])
         )
     
-    # Orqaga qaytish
     elif data == 'back_to_menu':
         await query.edit_message_text(
             "👋 Assalomu alaykum, Admin!\n\n"
@@ -209,7 +197,6 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     state = context.user_data.get('state')
     text = update.message.text
     
-    # Kalit so'z qo'shish
     if state == WAITING_KEYWORD:
         if db.add_keyword(text):
             await update.message.reply_text(
@@ -223,16 +210,13 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
         context.user_data['state'] = None
     
-    # Izlovchi guruh qo'shish
     elif state == WAITING_SEARCH_GROUP:
         try:
-            # Guruh ID yoki havolani aniqlash
             if text.startswith('https://t.me/') or text.startswith('@'):
                 group_identifier = text
             else:
                 group_identifier = int(text)
             
-            # Guruh ma'lumotlarini olish
             try:
                 chat = await context.bot.get_chat(group_identifier)
                 group_id = chat.id
@@ -260,16 +244,13 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
         context.user_data['state'] = None
     
-    # Shaxsiy guruh qo'shish
     elif state == WAITING_PERSONAL_GROUP:
         try:
-            # Guruh ID yoki havolani aniqlash
             if text.startswith('https://t.me/') or text.startswith('@'):
                 group_identifier = text
             else:
                 group_identifier = int(text)
             
-            # Guruh ma'lumotlarini olish
             try:
                 chat = await context.bot.get_chat(group_identifier)
                 group_id = chat.id
@@ -311,16 +292,13 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 def main():
     """Botni ishga tushirish"""
-    # Application yaratish
     application = Application.builder().token(BOT_TOKEN).build()
     
-    # Handlerlarni qo'shish
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("cancel", cancel))
     application.add_handler(CallbackQueryHandler(button_handler))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
     
-    # Botni ishga tushirish
     logger.info("Bot ishga tushirilmoqda...")
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
