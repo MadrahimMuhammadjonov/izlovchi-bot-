@@ -14,7 +14,8 @@ API_HASH = "fcdf748b56fb519c6900d02e25ae2d62"
 PHONE_NUMBER = "+998931317231"
 SESSION_STRING = "1ApWapzMBu7wMtDnHS2BHSlKKIcR0O326szif2GpPek9MHzgLxHaafUzSGh864f--z_ImIsN8GkhzJY-T_TLRSyc2MdUBAX89sRsqUWumntyGQ1u0d0h3c0t0k_VSaqq3Mjjt401spd3TcLUgz8qb23Eh7PtVSvs1viHduuKXyExsUAkstyewIDamcQf2mlGQuoQiL5WBc63h5q6Roj-kff-xxr1TJB-3kag0XdKVKzS50xFWyXKBoixQ_XynUB1yk4qkaUbKv9ciCyZGy6yTRm3IgGk8Rb2BECId-p6fRR-jPsVemBhDZIOY2gwNNTrwty8I988h0lACcrT5Hyh9uX56KRlr8tc="
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
 # Database yaratish
 def init_db():
@@ -286,10 +287,15 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("❌ Noto'g'ri format! Qaytadan urinib ko'ring:", reply_markup=main_menu_keyboard())
             clear_user_state(user_id)
 
+# Global bot application
+bot_application = None
+
 # Userbot funksiyalari
-async def userbot_main(bot_app):
+async def userbot_main():
+    global bot_application
     client = TelegramClient('session', API_ID, API_HASH)
     await client.start(phone=PHONE_NUMBER)
+    logger.info("✅ Userbot ishga tushdi")
     
     @client.on(events.NewMessage())
     async def handler(event):
@@ -336,17 +342,20 @@ async def userbot_main(bot_app):
             keyboard = [[InlineKeyboardButton("👤 Profilga o'tish", url=f"tg://user?id={sender_id}")]]
             reply_markup = InlineKeyboardMarkup(keyboard)
             
-            await bot_app.bot.send_message(
-                chat_id=personal_group[0],
-                text=notification,
-                reply_markup=reply_markup
-            )
+            if bot_application:
+                await bot_application.bot.send_message(
+                    chat_id=personal_group[0],
+                    text=notification,
+                    reply_markup=reply_markup
+                )
+                logger.info(f"✅ Xabar yuborildi: {found_keywords}")
         except Exception as e:
-            logging.error(f"Userbot xatosi: {e}")
+            logger.error(f"Userbot xatosi: {e}")
     
     await client.run_until_disconnected()
 
-async def check_pending_groups(bot_app):
+async def check_pending_groups():
+    global bot_application
     while True:
         try:
             conn = sqlite3.connect('bot_data.db')
@@ -370,46 +379,65 @@ async def check_pending_groups(bot_app):
                     
                     if state == 'process_search_group':
                         if add_search_group(group_id, group_name):
-                            await bot_app.bot.send_message(user_id, f"✅ Izlovchi guruh '{group_name}' qo'shildi!", reply_markup=main_menu_keyboard())
+                            await bot_application.bot.send_message(user_id, f"✅ Izlovchi guruh '{group_name}' qo'shildi!", reply_markup=main_menu_keyboard())
                         else:
-                            await bot_app.bot.send_message(user_id, "❌ Bu guruh allaqachon mavjud!", reply_markup=main_menu_keyboard())
+                            await bot_application.bot.send_message(user_id, "❌ Bu guruh allaqachon mavjud!", reply_markup=main_menu_keyboard())
                     
                     elif state == 'process_personal_group':
                         set_personal_group(group_id, group_name)
-                        await bot_app.bot.send_message(user_id, f"✅ Shaxsiy guruh '{group_name}' o'rnatildi!", reply_markup=main_menu_keyboard())
+                        await bot_application.bot.send_message(user_id, f"✅ Shaxsiy guruh '{group_name}' o'rnatildi!", reply_markup=main_menu_keyboard())
                     
                     clear_user_state(user_id)
                     await client.disconnect()
                     
                 except Exception as e:
-                    await bot_app.bot.send_message(user_id, f"❌ Xatolik: {str(e)}", reply_markup=main_menu_keyboard())
+                    await bot_application.bot.send_message(user_id, f"❌ Xatolik: {str(e)}", reply_markup=main_menu_keyboard())
                     clear_user_state(user_id)
         except Exception as e:
-            logging.error(f"Check groups error: {e}")
+            logger.error(f"Check groups error: {e}")
         
         await asyncio.sleep(2)
 
 # Asosiy dastur
 async def main():
+    global bot_application
+    
+    logger.info("🚀 Bot ishga tushmoqda...")
     init_db()
     
-    bot_app = Application.builder().token(BOT_TOKEN).build()
+    bot_application = Application.builder().token(BOT_TOKEN).build()
     
-    bot_app.add_handler(CommandHandler("start", start))
-    bot_app.add_handler(CallbackQueryHandler(button_handler))
-    bot_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
+    bot_application.add_handler(CommandHandler("start", start))
+    bot_application.add_handler(CallbackQueryHandler(button_handler))
+    bot_application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
     
-    await bot_app.initialize()
-    await bot_app.start()
+    # Bot initialize va start
+    await bot_application.initialize()
+    await bot_application.start()
+    logger.info("✅ Bot tayyor")
+    
+    # Polling boshlash (to'g'ri usul)
+    await bot_application.updater.start_polling(allowed_updates=Update.ALL_TYPES)
     
     # Guruh tekshiruvchini ishga tushirish
-    asyncio.create_task(check_pending_groups(bot_app))
+    asyncio.create_task(check_pending_groups())
+    logger.info("✅ Guruh processor ishga tushdi")
     
     # Userbotni ishga tushirish
-    asyncio.create_task(userbot_main(bot_app))
+    asyncio.create_task(userbot_main())
+    logger.info("✅ Userbot ishga tushmoqda...")
     
-    await bot_app.updater.start_polling()
-    await asyncio.Event().wait()
+    # Cheksiz kutish
+    try:
+        await asyncio.Event().wait()
+    except KeyboardInterrupt:
+        logger.info("⏹️ Bot to'xtatilmoqda...")
+        await bot_application.updater.stop()
+        await bot_application.stop()
+        await bot_application.shutdown()
 
 if __name__ == '__main__':
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        logger.info("✅ Bot to'xtatildi")
