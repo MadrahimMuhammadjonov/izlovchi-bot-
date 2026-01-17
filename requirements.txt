@@ -1,0 +1,5 @@
+aiogram==3.17.0
+pyrogram==2.0.106
+tgcrypto
+sqlite3
+python-dotenv
