@@ -11,22 +11,14 @@ from aiogram.filters import Command
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 # --- KONFIGURATSIYA ---
-# DIQQAT: BotFather'dan yangi token olib shu yerga qo'ying!
 BOT_TOKEN = "8137576363:AAHerJWL_b4kgQsTY03_Dt6sLuPny-BlZ8g"
-
-# Ikkala admin ID raqami
 ADMIN_LIST = [7664337104, 7740552653] 
-# Dasturchi ID (bog'lanish tugmasi uchun)
 DEV_ID = 7740552653
-
 API_ID = 31654640
 API_HASH = "22e66db2dba07587217d2f308ae412fb"
 SESSION_STRING = "1ApWapzMBu4E9Kp6_zhIWbAr9GndIqukjWw51smf1l9CXbEviZSSGZCg3RzqIS4HCEigBsBvup0b6iPctHFcigaO_p70kKhrJ2Qkza5Ua2bqcJbFIlRZtJPxfoESMmXMqEtZWQ-VytgJp4sQFT_6sta_LMldT6wiCai5wMPKO51iKHYUYHB2ggRRr7Lp9JOprTRmBWdOVYX0povfDgWDrIgBuO1BVXhTpBin2BpjwxvdknZkzv-wiZJRpAMuXfazNM1cg80ggNbNP313yY3ptY7jBR_TjM1--LbzSzTY9IpC5RPwcg-OQB1nixO3U-KP4e4LhLrGi0i4F2y-R3QagopY8DelDotI="
-
-# Natijalar tushadigan guruh ID
 PERSONAL_GROUP_ID = -1003267783623
 
-# Logging sozlamalari
 logging.basicConfig(level=logging.ERROR)
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
@@ -75,11 +67,9 @@ def contact_dev_kb():
 @client.on(events.NewMessage)
 async def handle_new_message(event):
     try:
-        # Bazadagi guruhlarni tekshirish
         s_groups = [g[0] for g in db_query("SELECT group_id FROM search_groups", fetch=True)]
         if event.chat_id not in s_groups: return
         
-        # Bazadagi kalit so'zlarni tekshirish
         keywords = [k[0] for k in db_query("SELECT keyword FROM keywords", fetch=True)]
         text = event.message.message
         if not text: return
@@ -126,6 +116,48 @@ async def show_menus(callback: types.CallbackQuery):
     prefix = callback.data.replace("_menu", "")
     await callback.message.edit_text(f"<b>{prefix.replace('_', ' ').capitalize()} bo'limi:</b>", reply_markup=sub_menu(prefix), parse_mode="HTML")
 
+# --- O'CHIRISH FUNKSIYALARI (YANGI QO'SHILDI) ---
+@dp.callback_query(F.data.startswith("del_menu_"))
+async def delete_menu(callback: types.CallbackQuery):
+    if callback.from_user.id not in ADMIN_LIST: return
+    prefix = callback.data.replace("del_menu_", "")
+    
+    if prefix == "keyword":
+        data = db_query("SELECT id, keyword FROM keywords", fetch=True)
+        text = "🗑 <b>O'chirish uchun kalit so'zni tanlang:</b>"
+    else:
+        data = db_query("SELECT id, group_name FROM search_groups", fetch=True)
+        text = "🗑 <b>O'chirish uchun guruhni tanlang:</b>"
+    
+    kb = []
+    if data:
+        for item in data:
+            kb.append([InlineKeyboardButton(text=f"❌ {item[1]}", callback_data=f"execute_del_{prefix}_{item[0]}")])
+    
+    kb.append([InlineKeyboardButton(text="🔙 Orqaga", callback_data=f"{prefix}_menu")])
+    await callback.message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=kb), parse_mode="HTML")
+
+@dp.callback_query(F.data.startswith("execute_del_"))
+async def execute_delete(callback: types.CallbackQuery):
+    if callback.from_user.id not in ADMIN_LIST: return
+    parts = callback.data.split("_")
+    prefix = parts[2]
+    item_id = parts[3]
+    
+    if prefix == "keyword":
+        db_query("DELETE FROM keywords WHERE id=?", (item_id,))
+    else:
+        # Guruhdan chiqishga harakat qilish
+        group_res = db_query("SELECT group_id FROM search_groups WHERE id=?", (item_id,), fetch=True)
+        if group_res:
+            try: await client(functions.channels.LeaveChannelRequest(channel=group_res[0][0]))
+            except: pass
+        db_query("DELETE FROM search_groups WHERE id=?", (item_id,))
+    
+    await callback.answer("✅ Muvaffaqiyatli o'chirildi")
+    await delete_menu(callback) # Menyuni yangilash
+
+# --- QO'SHISH BOSHLANISHI ---
 @dp.callback_query(F.data.startswith("add_"))
 async def add_start(callback: types.CallbackQuery):
     if callback.from_user.id not in ADMIN_LIST: return
@@ -142,24 +174,17 @@ async def process_groups(message, links):
 
     for i, link in enumerate(links):
         try:
-            # Havolani tahlil qilish va tozalash
             clean_link = re.sub(r'/\d+$', '', link.strip().replace("https://t.me/", "").replace("@", ""))
             entity = await client.get_entity(clean_link)
-            
-            # Guruhga kirish
             await client(functions.channels.JoinChannelRequest(channel=entity))
-            
-            # ID'ni bazaga saqlash
             eid = entity.id if str(entity.id).startswith("-100") else int(f"-100{entity.id}")
             db_query("INSERT OR IGNORE INTO search_groups (group_id, group_name) VALUES (?, ?)", (eid, entity.title))
             success += 1
         except Exception as e:
             failed.append(f"{link} ({str(e)})")
 
-        # Railway bloklanmasligi uchun kichik kutish
         await asyncio.sleep(3)
-        try:
-            await status_msg.edit_text(f"📊 Jarayon: {i+1}/{total}\n✅ Qo'shildi: {success}\n❌ Xato: {len(failed)}")
+        try: await status_msg.edit_text(f"📊 Jarayon: {i+1}/{total}\n✅ Qo'shildi: {success}\n❌ Xato: {len(failed)}")
         except: pass
             
     final_text = f"🏁 <b>Jarayon yakunlandi!</b>\n\n✅ Muvaffaqiyatli: {success}\n❌ Xato: {len(failed)}"
@@ -183,7 +208,6 @@ async def handle_input(message: types.Message):
         db_query("DELETE FROM user_state WHERE user_id=?", (message.from_user.id,))
     
     elif state == "wait_search_group":
-        # Linklarni qidirish (regex)
         links = re.findall(r'(?:https?://)?t\.me/[a-zA-Z0-9_]{4,}|@[a-zA-Z0-9_]{4,}', message.text)
         if not links:
             return await message.answer("❌ Yaroqli havola topilmadi! Iltimos @guruh yoki t.me/guruh formatida yuboring.")
@@ -200,7 +224,7 @@ async def view_list(callback: types.CallbackQuery):
     data = db_query(f"SELECT {col} FROM {table}", fetch=True)
     txt = f"📋 <b>{prefix.capitalize()} ro'yxati:</b>\n\n"
     if data:
-        txt += "\n".join([f"• {k[0]}" for k in data[:100]]) # Max 100 ta ko'rsatish
+        txt += "\n".join([f"• {k[0]}" for k in data[:100]])
     else:
         txt += "Hozircha bo'sh."
     await callback.message.edit_text(txt[:4000], reply_markup=sub_menu(prefix), parse_mode="HTML")
@@ -223,13 +247,9 @@ async def check_status(callback: types.CallbackQuery):
 # --- ASOSIY ISHGA TUSHIRISH ---
 async def main():
     init_db()
-    # ConflictError oldini olish uchun webhookni tozalash
     await bot.delete_webhook(drop_pending_updates=True)
-    
     await client.start()
     print("Bot va Userbot Railway serverida ishga tushdi!")
-    
-    # Bot va Userbotni parallel ishga tushirish
     await asyncio.gather(
         dp.start_polling(bot),
         client.run_until_disconnected()
