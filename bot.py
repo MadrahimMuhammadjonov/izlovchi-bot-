@@ -12,7 +12,7 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 # --- KONFIGURATSIYA ---
 # DIQQAT: BotFather'dan yangi token olib shu yerga qo'ying!
-BOT_TOKEN = "8137576363:AAHnsJSkK5oNtGBUX8FDC7OHtYevB2xeMgQ"
+BOT_TOKEN = "8137576363:AAHerJWL_b4kgQsTY03_Dt6sLuPny-BlZ8g"
 
 # Ikkala admin ID raqami
 ADMIN_LIST = [7664337104, 7740552653] 
