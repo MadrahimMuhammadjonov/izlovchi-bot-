@@ -38,6 +38,9 @@ userbot = Client(
     in_memory=True
 )
 
+# Global cache guruhlar uchun
+CACHED_GROUPS = set()
+
 # --- DATABASE FUNKSIYALARI ---
 async def db_query(query, params=(), fetch=False):
     """Database bilan ishlash uchun xavfsiz funksiya"""
@@ -73,9 +76,7 @@ async def join_chat_logic(link):
                 chat = await userbot.join_chat(invite_hash)
                 logging.info(f"✅ Guruhga qo'shildi (invite): {chat.title}")
             except UserAlreadyParticipant:
-                logging.info("Allaqachon guruh a'zosi")
-                # Invite hash orqali chat olish mumkin emas, shuning uchun None qaytaramiz
-                # Lekin agar link username bo'lsa, get_chat ishlatishimiz mumkin
+                logging.info("Allaqachon guruh a'zosi (invite link)")
                 return None
         else:
             try:
@@ -85,14 +86,10 @@ async def join_chat_logic(link):
                 logging.info("Allaqachon guruh a'zosi, ma'lumot olinmoqda...")
                 chat = await userbot.get_chat(clean)
         
-        # Qo'shimcha: Peer cache yangilash uchun kichik kutish
+        # Cache ga qo'shish
         if chat:
+            CACHED_GROUPS.add(chat.id)
             await asyncio.sleep(1)
-            # Chat ma'lumotlarini qayta olish (cache yangilash)
-            try:
-                chat = await userbot.get_chat(chat.id)
-            except Exception as e:
-                logging.warning(f"Cache refresh warning: {e}")
         
         return chat
         
@@ -123,18 +120,11 @@ async def message_watcher(client, message):
         return
     
     try:
-        # 1. Kuzatiladigan guruhlar ro'yxatini olish
-        res_groups = await db_query("SELECT group_id FROM search_groups", fetch=True)
-        if not res_groups:
+        # 1. Cache dan guruhlarni tekshirish (database ga murojaat qilmasdan)
+        if message.chat.id not in CACHED_GROUPS:
             return
         
-        active_group_ids = [g[0] for g in res_groups]
-        
-        # 2. Joriy guruh kuzatilayotganmi tekshirish
-        if message.chat.id not in active_group_ids:
-            return
-        
-        # 3. Kalit so'zlarni olish
+        # 2. Kalit so'zlarni olish
         res_keywords = await db_query("SELECT keyword FROM keywords", fetch=True)
         if not res_keywords:
             return
@@ -142,18 +132,20 @@ async def message_watcher(client, message):
         keywords = [k[0].lower() for k in res_keywords]
         message_text_lower = message.text.lower()
         
-        # 4. Kalit so'zlar topilganmi tekshirish
+        # 3. Kalit so'zlar topilganmi tekshirish
         found_keywords = [kw for kw in keywords if kw in message_text_lower]
         
         if not found_keywords:
             return
         
-        # 5. Xabar ma'lumotlarini to'plash
+        # 4. Xabar ma'lumotlarini to'plash (peer resolution kerak emas!)
         user_name = "Foydalanuvchi"
         user_id = 0
         
         if message.from_user:
-            user_name = message.from_user.full_name or "Foydalanuvchi"
+            user_name = message.from_user.first_name or "Foydalanuvchi"
+            if message.from_user.last_name:
+                user_name += f" {message.from_user.last_name}"
             user_id = message.from_user.id
         
         group_title = message.chat.title or "Guruh"
@@ -163,17 +155,17 @@ async def message_watcher(client, message):
         group_title_safe = html.escape(group_title)
         message_text_safe = html.escape(message.text[:800])
         
-        # 6. Hisobot tayyorlash
+        # 5. Hisobot tayyorlash
         report = (
             f"🎯 <b>Yangi xabar topildi!</b>\n\n"
             f"🔑 <b>Kalit so'z:</b> {', '.join(found_keywords)}\n"
-            f"👤 <b>Kimdan:</b> {user_name_safe} (ID: <code>{user_id}</code>)\n"
-            f"📍 <b>Guruh:</b> {group_title_safe}\n"
-            f"🕐 <b>Vaqt:</b> {message.date.strftime('%Y-%m-%d %H:%M:%S')}\n\n"
+            f"👤 <b>Kimdan:</b> {user_name_safe}\n"
+            f"🆔 <b>User ID:</b> <code>{user_id}</code>\n"
+            f"📍 <b>Guruh:</b> {group_title_safe}\n\n"
             f"📝 <b>Xabar:</b>\n<i>{message_text_safe}</i>"
         )
         
-        # 7. Tugmalar yaratish
+        # 6. Tugmalar yaratish
         keyboard_buttons = []
         
         if user_id > 0:
@@ -181,15 +173,15 @@ async def message_watcher(client, message):
                 InlineKeyboardButton(text="👤 Profilga o'tish", url=f"tg://user?id={user_id}")
             ])
         
-        # Agar guruh username bo'lsa, link qo'shish
-        if message.chat.username:
+        # Agar guruh username bo'lsa
+        if hasattr(message.chat, 'username') and message.chat.username:
             keyboard_buttons.append([
                 InlineKeyboardButton(text="📱 Guruhga o'tish", url=f"https://t.me/{message.chat.username}")
             ])
         
         kb = InlineKeyboardMarkup(inline_keyboard=keyboard_buttons) if keyboard_buttons else None
         
-        # 8. Shaxsiy guruhga yuborish
+        # 7. Shaxsiy guruhga yuborish
         try:
             await bot.send_message(
                 chat_id=PERSONAL_GROUP_ID, 
@@ -198,13 +190,14 @@ async def message_watcher(client, message):
                 parse_mode="HTML",
                 disable_web_page_preview=True
             )
-            logging.info(f"✅ Xabar yuborildi: {group_title} | Kalit so'z: {', '.join(found_keywords)}")
+            logging.info(f"✅ Xabar yuborildi: {group_title} | Kalit: {', '.join(found_keywords)}")
         
         except Exception as send_error:
-            logging.error(f"❌ Shaxsiy guruhga yuborishda xato: {send_error}")
+            logging.error(f"❌ Yuborishda xato: {send_error}")
     
     except Exception as e:
-        logging.debug(f"Watcher error: {type(e).__name__}: {e}")
+        # Xatolarni logga yozish lekin bot ishini to'xtatmaslik
+        logging.debug(f"Watcher ichki xato: {type(e).__name__}")
 
 # --- ADMIN PANEL KLAVIATURALARI ---
 def main_kb():
@@ -257,7 +250,6 @@ async def cmd_start(message: types.Message):
 @dp.callback_query(F.data == "home")
 async def back_home(callback: types.CallbackQuery):
     """Asosiy menyuga qaytish"""
-    # Foydalanuvchi holatini tozalash
     await db_query("DELETE FROM user_state WHERE user_id=?", (callback.from_user.id,))
     
     await callback.message.edit_text(
@@ -288,7 +280,6 @@ async def start_add(callback: types.CallbackQuery):
     mode = callback.data.split("_")[1]
     state = "adding_kw" if mode == "kw" else "adding_gr"
     
-    # Foydalanuvchi holatini saqlash
     await db_query(
         "INSERT OR REPLACE INTO user_state (user_id, state) VALUES (?, ?)", 
         (callback.from_user.id, state)
@@ -303,7 +294,7 @@ async def start_add(callback: types.CallbackQuery):
     else:
         text = (
             "📡 <b>Guruh qo'shish</b>\n\n"
-            "Guruh linkini yuboring. Userbot avtomatik ravishda guruhga qo'shiladi.\n\n"
+            "Guruh linkini yuboring. Userbot avtomatik guruhga qo'shiladi.\n\n"
             "<i>Masalan: https://t.me/example_group</i>"
         )
     
@@ -334,7 +325,7 @@ async def view_items(callback: types.CallbackQuery):
             if mode == "kw":
                 items.append(f"{i}. {html.escape(row[0])}")
             else:
-                items.append(f"{i}. {html.escape(row[0])} (ID: <code>{row[1]}</code>)")
+                items.append(f"{i}. {html.escape(row[0])}\n   ID: <code>{row[1]}</code>")
         
         text = title + "\n".join(items)
     
@@ -382,12 +373,20 @@ async def process_remove(callback: types.CallbackQuery):
     """O'chirish jarayoni"""
     _, mode, item_id = callback.data.split("_")
     
+    if mode == "gr":
+        # Guruhni cache dan ham o'chirish
+        group_data = await db_query(
+            "SELECT group_id FROM search_groups WHERE id=?", 
+            (item_id,), 
+            fetch=True
+        )
+        if group_data:
+            CACHED_GROUPS.discard(group_data[0][0])
+    
     table = "keywords" if mode == "kw" else "search_groups"
     await db_query(f"DELETE FROM {table} WHERE id=?", (item_id,))
     
     await callback.answer("✅ O'chirildi", show_alert=False)
-    
-    # Menyuni yangilash
     await delete_menu(callback)
 
 @dp.callback_query(F.data == "sys_status")
@@ -396,7 +395,6 @@ async def sys_status(callback: types.CallbackQuery):
     kw_count = (await db_query("SELECT COUNT(*) FROM keywords", fetch=True))[0][0]
     gr_count = (await db_query("SELECT COUNT(*) FROM search_groups", fetch=True))[0][0]
     
-    # Userbot holati
     userbot_status = "✅ Faol" if userbot.is_connected else "❌ O'chiq"
     
     status_text = (
@@ -404,6 +402,7 @@ async def sys_status(callback: types.CallbackQuery):
         f"🔑 Kalit so'zlar: <b>{kw_count}</b>\n"
         f"📡 Guruhlar: <b>{gr_count}</b>\n"
         f"🤖 Userbot: {userbot_status}\n"
+        f"💾 Cache: <b>{len(CACHED_GROUPS)}</b> guruh\n"
         f"📬 Xabar jo'natish: ✅ Faol"
     )
     
@@ -419,11 +418,9 @@ async def sys_status(callback: types.CallbackQuery):
 async def handle_text_messages(message: types.Message):
     """Foydalanuvchi matn xabarlarini qayta ishlash"""
     
-    # Faqat adminlar uchun
     if message.from_user.id not in ADMIN_LIST:
         return
     
-    # Foydalanuvchi holatini tekshirish
     state_result = await db_query(
         "SELECT state FROM user_state WHERE user_id=?", 
         (message.from_user.id,), 
@@ -445,19 +442,17 @@ async def handle_text_messages(message: types.Message):
         
         added_count = 0
         for keyword in keywords:
-            result = await db_query(
-                "INSERT OR IGNORE INTO keywords (keyword) VALUES (?)", 
-                (keyword,)
-            )
-            if result is not None or result != []:
+            try:
+                await db_query("INSERT OR IGNORE INTO keywords (keyword) VALUES (?)", (keyword,))
                 added_count += 1
+            except:
+                pass
         
         await db_query("DELETE FROM user_state WHERE user_id=?", (message.from_user.id,))
         
         await message.answer(
             f"✅ <b>Qo'shildi!</b>\n\n"
-            f"Jami: {len(keywords)} ta kalit so'z\n"
-            f"Yangi: {added_count} ta",
+            f"Jami: {len(keywords)} ta kalit so'z",
             reply_markup=main_kb(),
             parse_mode="HTML"
         )
@@ -469,11 +464,13 @@ async def handle_text_messages(message: types.Message):
         chat = await join_chat_logic(message.text.strip())
         
         if chat:
-            # Guruhni bazaga saqlash
             await db_query(
                 "INSERT OR IGNORE INTO search_groups (group_id, group_name) VALUES (?, ?)", 
                 (chat.id, chat.title)
             )
+            
+            # Cache ga qo'shish
+            CACHED_GROUPS.add(chat.id)
             
             await db_query("DELETE FROM user_state WHERE user_id=?", (message.from_user.id,))
             
@@ -487,11 +484,8 @@ async def handle_text_messages(message: types.Message):
         else:
             await wait_msg.edit_text(
                 "❌ <b>Xatolik!</b>\n\n"
-                "Guruhga qo'shilishda muammo yuz berdi.\n"
-                "Iltimos, quyidagilarni tekshiring:\n"
-                "• Link to'g'ri ekanligini\n"
-                "• Guruh privat emasligini\n"
-                "• Userbot ban qilinmaganligini",
+                "Guruhga qo'shilishda muammo.\n"
+                "Link to'g'ri ekanligini tekshiring.",
                 reply_markup=main_kb(),
                 parse_mode="HTML"
             )
@@ -502,7 +496,7 @@ async def handle_text_messages(message: types.Message):
 async def main():
     """Botni ishga tushirish"""
     
-    # 1. Database jadvallarini yaratish
+    # Database jadvallarini yaratish
     await db_query('''
         CREATE TABLE IF NOT EXISTS keywords (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -528,51 +522,42 @@ async def main():
     logging.info("✅ Database initialized")
     
     try:
-        # 2. Userbot ni ishga tushirish
+        # Userbot ni ishga tushirish
         await userbot.start()
         logging.info("✅ Userbot started successfully")
         
-        # 3. Barcha saqlangan guruhlarni cache ga yuklash
-        groups = await db_query("SELECT group_id, group_name FROM search_groups", fetch=True)
+        # Barcha guruhlarni cache ga yuklash
+        groups = await db_query("SELECT group_id FROM search_groups", fetch=True)
         
         if groups:
             logging.info(f"📡 Loading {len(groups)} groups into cache...")
-            
-            for group_id, group_name in groups:
-                try:
-                    await userbot.get_chat(group_id)
-                    logging.info(f"  ✅ {group_name} (ID: {group_id})")
-                    await asyncio.sleep(0.5)  # Rate limit uchun
-                except Exception as e:
-                    logging.warning(f"  ⚠️ {group_name} (ID: {group_id}): {e}")
+            for group_id, in groups:
+                CACHED_GROUPS.add(group_id)
+            logging.info(f"✅ Cached {len(CACHED_GROUPS)} groups")
         
-        # 4. Bot ni ishga tushirish
+        # Bot ni ishga tushirish
         await bot.delete_webhook(drop_pending_updates=True)
-        logging.info("✅ Bot webhook cleared")
         
         logging.info("🚀 Sistema muvaffaqiyatli ishga tushdi!")
-        logging.info(f"👤 Admin IDs: {ADMIN_LIST}")
-        logging.info(f"📬 Personal group ID: {PERSONAL_GROUP_ID}")
+        logging.info(f"👤 Admins: {ADMIN_LIST}")
+        logging.info(f"📬 Personal group: {PERSONAL_GROUP_ID}")
         
-        # 5. Polling boshlash
         await dp.start_polling(bot)
     
     except Exception as e:
-        logging.error(f"❌ CRITICAL ERROR: {type(e).__name__}: {e}")
+        logging.error(f"❌ CRITICAL: {e}")
         raise
     
     finally:
-        # 6. Tozalash
         logging.info("🛑 Shutting down...")
         if userbot.is_connected:
             await userbot.stop()
-        logging.info("✅ Cleanup completed")
 
 # --- ISHGA TUSHIRISH ---
 if __name__ == '__main__':
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-        logging.info("⚠️ Bot to'xtatildi (Ctrl+C)")
+        logging.info("⚠️ Bot to'xtatildi")
     except Exception as e:
-        logging.critical(f"💥 Fatal error: {e}")
+        logging.critical(f"💥 Fatal: {e}")
