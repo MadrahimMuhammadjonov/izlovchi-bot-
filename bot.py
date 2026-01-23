@@ -2,9 +2,7 @@ import asyncio
 import sqlite3
 import logging
 import html
-import re
-import os
-from telegram.client import Telegram
+from pyrogram import Client, filters
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
@@ -20,14 +18,8 @@ logging.basicConfig(level=logging.INFO)
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
-# TDLib Klientini sozlash
-tg = Telegram(
-    api_id=API_ID,
-    api_hash=API_HASH,
-    bot_token=BOT_TOKEN,
-    database_encryption_key='changeme_secret_123',
-    files_directory='tdlib_session'
-)
+# Pyrogram (TDLib Engine) - Railway'da muammosiz ishlashi uchun
+app = Client("my_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 
 # --- DB OPERATSIYALARI ---
 def db_op(query, params=(), fetch=False):
@@ -45,43 +37,33 @@ def init_db():
     db_op('CREATE TABLE IF NOT EXISTS search_groups (id INTEGER PRIMARY KEY, group_id INTEGER UNIQUE, group_name TEXT)')
     db_op('CREATE TABLE IF NOT EXISTS user_state (user_id INTEGER PRIMARY KEY, state TEXT, data TEXT)')
 
-# --- USERBOT (TDLib XABARLARNI KUZATISH) ---
-def update_handler(update):
-    if 'message' not in update:
-        return
-    
-    msg_data = update['message']
-    chat_id = msg_data.get('chat_id')
-    
-    # Guruh bazada borligini tekshirish
-    res = db_op("SELECT group_id FROM search_groups WHERE group_id=?", (chat_id,), fetch=True)
-    if not res:
-        return
-
-    content = msg_data.get('content', {})
-    text = ""
-    if content.get('@type') == 'messageText':
-        text = content['text'].get('text', "")
-    
-    if text:
+# --- USERBOT (XABARLARNI KUZATISH) ---
+@app.on_message(filters.group)
+async def watcher(client, message):
+    try:
+        if not message.text: return
+        
+        # Bazadan guruhlarni olish
+        groups = [g[0] for g in db_op("SELECT group_id FROM search_groups", fetch=True)]
+        if message.chat.id not in groups: return
+        
+        # Kalit so'zlarni tekshirish
         words = [k[0] for k in db_op("SELECT keyword FROM keywords", fetch=True)]
-        found = [w for w in words if w.lower() in text.lower()]
+        found = [w for w in words if w.lower() in message.text.lower()]
         
         if found:
-            sender_id = msg_data.get('sender_id', {}).get('user_id', "noma'lum")
-            p_link = f"tg://user?id={sender_id}"
+            p_link = f"tg://user?id={message.from_user.id}" if message.from_user else "https://t.me/unknown"
             kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="👤 Profil", url=p_link)]])
             
-            report = (f"🔍 <b>Topildi:</b> {', '.join(found)}\n"
-                      f"<b>📍 Guruh ID:</b> <code>{chat_id}</code>\n\n"
-                      f"<b>📝 Xabar:</b>\n<i>{html.escape(text[:800])}</i>")
+            msg = (f"🔍 <b>Topildi:</b> {', '.join(found)}\n"
+                   f"<b>📍 Guruh:</b> {html.escape(message.chat.title or 'Guruh')}\n\n"
+                   f"<b>📝 Xabar:</b>\n<i>{html.escape(message.text[:800])}</i>")
             
-            asyncio.run_coroutine_threadsafe(
-                bot.send_message(PERSONAL_GROUP_ID, report, reply_markup=kb, parse_mode="HTML"),
-                loop
-            )
+            await bot.send_message(PERSONAL_GROUP_ID, msg, reply_markup=kb, parse_mode="HTML")
+    except Exception as e:
+        logging.error(f"Xatolik: {e}")
 
-# --- ASOSIY MENYULAR ---
+# --- ASOSIY MENYU ---
 def main_kb():
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🔑 Kalit so'zlar", callback_data='open_keywords')],
@@ -89,6 +71,7 @@ def main_kb():
         [InlineKeyboardButton(text="⚙️ Tizim holati", callback_data='sys_status')]
     ])
 
+# --- SUB MENYULAR ---
 def sub_kb(mode):
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="➕ Qo'shish", callback_data=f'add_{mode}')],
@@ -97,12 +80,12 @@ def sub_kb(mode):
         [InlineKeyboardButton(text="🔙 Orqaga", callback_data='main_home')]
     ])
 
-# --- AIOGRAM HANDLERLARI ---
+# --- BOT HANDLERLARI ---
 @dp.message(Command("start"))
 async def start(m: types.Message):
     if m.from_user.id in ADMIN_LIST:
         db_op("DELETE FROM user_state WHERE user_id=?", (m.from_user.id,))
-        await m.answer("🤖 <b>TDLib Boshqaruv paneli:</b>", reply_markup=main_kb(), parse_mode="HTML")
+        await m.answer("🤖 <b>Boshqaruv paneli:</b>", reply_markup=main_kb(), parse_mode="HTML")
 
 @dp.callback_query(F.data == "main_home")
 async def go_home(c: types.CallbackQuery):
@@ -140,12 +123,9 @@ async def handle_text(m: types.Message):
     elif state == "adding_gr":
         link = m.text.strip().replace("@", "").replace("https://t.me/", "").split("/")[0]
         try:
-            res = tg.call_method('searchPublicChat', {'username': link})
-            res.wait()
-            chat = res.update
-            tg.call_method('joinChat', {'chat_id': chat['id']}).wait()
-            db_op("INSERT OR IGNORE INTO search_groups (group_id, group_name) VALUES (?, ?)", (chat['id'], chat['title']))
-            await m.answer(f"✅ Qo'shildi: {chat['title']}", reply_markup=sub_kb('gr'))
+            chat = await app.get_chat(link)
+            db_op("INSERT OR IGNORE INTO search_groups (group_id, group_name) VALUES (?, ?)", (chat.id, chat.title))
+            await m.answer(f"✅ Qo'shildi: {chat.title}", reply_markup=sub_kb('gr'))
         except Exception as e:
             await m.answer(f"❌ Xato: {e}")
     db_op("DELETE FROM user_state WHERE user_id=?", (m.from_user.id,))
@@ -156,10 +136,10 @@ async def view_list(c: types.CallbackQuery):
     mode = c.data.split("_")[1]
     if mode == "kw":
         data = db_op("SELECT keyword FROM keywords", fetch=True)
-        txt = "📋 <b>Kalit so'zlar:</b>\n\n" + "\n".join([f"• {x[0]}" for x in data]) if data else "❌ Ro'yxat bo'sh"
+        txt = "📋 <b>Kalit so'zlar:</b>\n\n" + "\n".join([f"• {x[0]}" for x in data]) if data else "❌ Bo'sh"
     else:
-        data = db_op("SELECT group_name, group_id FROM search_groups", fetch=True)
-        txt = "📋 <b>Guruhlar:</b>\n\n" + "\n".join([f"• {x[0]} (<code>{x[1]}</code>)" for x in data]) if data else "❌ Ro'yxat bo'sh"
+        data = db_op("SELECT group_name FROM search_groups", fetch=True)
+        txt = "📋 <b>Guruhlar:</b>\n\n" + "\n".join([f"• {x[0]}" for x in data]) if data else "❌ Bo'sh"
     await c.message.edit_text(txt, reply_markup=sub_kb(mode), parse_mode="HTML")
 
 @dp.callback_query(F.data.startswith("del_"))
@@ -168,16 +148,10 @@ async def del_list(c: types.CallbackQuery):
     table = "keywords" if mode == "kw" else "search_groups"
     col = "keyword" if mode == "kw" else "group_name"
     data = db_op(f"SELECT id, {col} FROM {table}", fetch=True)
-    
-    if not data:
-        await c.answer("O'chirish uchun ma'lumot yo'q!")
-        return
+    if not data: return await c.answer("O'chirish uchun ma'lumot yo'q!")
 
-    kb = []
-    for item_id, name in data:
-        kb.append([InlineKeyboardButton(text=f"❌ {name}", callback_data=f"rm_{mode}_{item_id}")])
-    kb.append([InlineKeyboardButton(text="🔙 Orqaga", callback_data=f'open_{"keywords" if mode=="kw" else "groups"}')])
-    
+    kb = [[InlineKeyboardButton(text=f"❌ {x[1]}", callback_data=f"rm_{mode}_{x[0]}")] for x in data]
+    kb.append([InlineKeyboardButton(text="🔙 Orqaga", callback_data=f"open_{'keywords' if mode=='kw' else 'groups'}")])
     await c.message.edit_text("🗑 O'chirishni tanlang:", reply_markup=InlineKeyboardMarkup(inline_keyboard=kb))
 
 @dp.callback_query(F.data.startswith("rm_"))
@@ -192,15 +166,12 @@ async def remove_item(c: types.CallbackQuery):
 async def status(c: types.CallbackQuery):
     k = db_op("SELECT COUNT(*) FROM keywords", fetch=True)[0][0]
     g = db_op("SELECT COUNT(*) FROM search_groups", fetch=True)[0][0]
-    await c.message.edit_text(f"⚙️ <b>Status:</b>\n\n🔑 So'zlar: {k}\n📡 Guruhlar: {g}\n✅ TDLib: Faol", reply_markup=main_kb(), parse_mode="HTML")
+    await c.message.edit_text(f"⚙️ <b>Status:</b>\n\n🔑 So'zlar: {k}\n📡 Guruhlar: {g}\n✅ Holat: Faol", reply_markup=main_kb(), parse_mode="HTML")
 
 # --- ISHGA TUSHIRISH ---
 async def main():
-    global loop
-    loop = asyncio.get_running_loop()
     init_db()
-    tg.login()
-    tg.add_handler(update_handler)
+    await app.start()
     await bot.delete_webhook(drop_pending_updates=True)
     await dp.start_polling(bot)
 
