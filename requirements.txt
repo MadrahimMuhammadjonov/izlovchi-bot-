@@ -1,5 +1,5 @@
-aiogram==3.4.1
 telethon==1.34.0
+aiogram==3.4.1
 asyncio==3.4.3
 sqlite3-binary==0.0.1
 logging==0.5.1.2
