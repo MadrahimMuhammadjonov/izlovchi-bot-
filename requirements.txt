@@ -1,4 +1,4 @@
 aiogram==3.16.0
 Telethon==1.38.1
 aiohttp==3.11.11
-python-dotenv==1.0.0
+aiosqlite==0.20.0
