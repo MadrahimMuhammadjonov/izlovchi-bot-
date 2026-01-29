@@ -4,6 +4,8 @@ import logging
 from typing import List, Tuple, Optional
 import html
 import re
+import signal
+import sys
 from telethon import TelegramClient, events, functions
 from telethon.sessions import StringSession
 from aiogram import Bot, Dispatcher, types, F
@@ -25,10 +27,13 @@ DB_PATH = 'bot_data.db'
 
 # Logging
 logging.basicConfig(
-    level=logging.WARNING,
+    level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+# Global shutdown event
+shutdown_event = asyncio.Event()
 
 # Bot va Client
 session = AiohttpSession()
@@ -45,32 +50,35 @@ client = TelegramClient(
 
 executor = ThreadPoolExecutor(max_workers=4)
 
-# In-memory cache
+# Cache
 class Cache:
     def __init__(self):
         self.keywords: set = set()
         self.groups: set = set()
         self.user_states: dict = {}
-        self.pagination: dict = {}  # Sahifalash uchun
+        self.pagination: dict = {}
         self.last_update: float = 0
         
     async def load_from_db(self):
         """Ma'lumotlarni DBdan xotiraga yuklash"""
-        async with aiosqlite.connect(DB_PATH) as db:
-            # Keywords
-            async with db.execute("SELECT keyword FROM keywords") as cursor:
-                self.keywords = {row[0].lower() for row in await cursor.fetchall()}
+        try:
+            async with aiosqlite.connect(DB_PATH) as db:
+                # Keywords
+                async with db.execute("SELECT keyword FROM keywords") as cursor:
+                    self.keywords = {row[0].lower() for row in await cursor.fetchall()}
+                
+                # Groups
+                async with db.execute("SELECT group_id FROM search_groups") as cursor:
+                    self.groups = {row[0] for row in await cursor.fetchall()}
             
-            # Groups
-            async with db.execute("SELECT group_id FROM search_groups") as cursor:
-                self.groups = {row[0] for row in await cursor.fetchall()}
-        
-        self.last_update = asyncio.get_event_loop().time()
-        logger.info(f"Cache loaded: {len(self.keywords)} keywords, {len(self.groups)} groups")
+            self.last_update = asyncio.get_event_loop().time()
+            logger.info(f"✅ Cache yuklandi: {len(self.keywords)} kalit so'z, {len(self.groups)} guruh")
+        except Exception as e:
+            logger.error(f"❌ Cache yuklashda xato: {e}")
 
 cache = Cache()
 
-# --- ASINXRON DB OPERATSIYALARI ---
+# --- DB OPERATSIYALARI ---
 async def db_execute(query: str, params: tuple = (), fetch: bool = False):
     """Asinxron DB operatsiyasi"""
     try:
@@ -88,31 +96,34 @@ async def db_execute(query: str, params: tuple = (), fetch: bool = False):
                 await db.commit()
                 return None
     except Exception as e:
-        logger.error(f"DB error: {e}")
+        logger.error(f"DB xato: {e}")
         return None
 
 async def init_db():
     """DB yaratish"""
-    await db_execute('''CREATE TABLE IF NOT EXISTS keywords 
-                       (id INTEGER PRIMARY KEY AUTOINCREMENT, 
-                        keyword TEXT UNIQUE COLLATE NOCASE)''')
-    await db_execute('''CREATE TABLE IF NOT EXISTS search_groups 
-                       (id INTEGER PRIMARY KEY AUTOINCREMENT, 
-                        group_id INTEGER UNIQUE, 
-                        group_name TEXT)''')
-    await db_execute('''CREATE TABLE IF NOT EXISTS user_state 
-                       (user_id INTEGER PRIMARY KEY, 
-                        state TEXT, 
-                        data TEXT)''')
-    
-    # Index qo'shish
-    await db_execute('CREATE INDEX IF NOT EXISTS idx_keyword ON keywords(keyword)')
-    await db_execute('CREATE INDEX IF NOT EXISTS idx_group_id ON search_groups(group_id)')
-    
-    # Cache yuklash
-    await cache.load_from_db()
+    try:
+        await db_execute('''CREATE TABLE IF NOT EXISTS keywords 
+                           (id INTEGER PRIMARY KEY AUTOINCREMENT, 
+                            keyword TEXT UNIQUE COLLATE NOCASE)''')
+        await db_execute('''CREATE TABLE IF NOT EXISTS search_groups 
+                           (id INTEGER PRIMARY KEY AUTOINCREMENT, 
+                            group_id INTEGER UNIQUE, 
+                            group_name TEXT)''')
+        await db_execute('''CREATE TABLE IF NOT EXISTS user_state 
+                           (user_id INTEGER PRIMARY KEY, 
+                            state TEXT, 
+                            data TEXT)''')
+        
+        await db_execute('CREATE INDEX IF NOT EXISTS idx_keyword ON keywords(keyword)')
+        await db_execute('CREATE INDEX IF NOT EXISTS idx_group_id ON search_groups(group_id)')
+        
+        await cache.load_from_db()
+        logger.info("✅ Database initialized")
+    except Exception as e:
+        logger.error(f"❌ DB yaratishda xato: {e}")
+        raise
 
-# --- KEYBOARD FUNKSIYALARI ---
+# --- KEYBOARDS ---
 def main_kb():
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🔑 Kalit so'zlar", callback_data='open_keywords')],
@@ -132,7 +143,6 @@ def pagination_kb(mode, page, total_pages):
     """Sahifalash klaviaturasi"""
     buttons = []
     
-    # Navigatsiya tugmalari
     nav_row = []
     if page > 0:
         nav_row.append(InlineKeyboardButton(text="⬅️ Oldingi", callback_data=f'page_{mode}_{page-1}'))
@@ -142,10 +152,8 @@ def pagination_kb(mode, page, total_pages):
     if nav_row:
         buttons.append(nav_row)
     
-    # Sahifa raqami
     buttons.append([InlineKeyboardButton(text=f"📄 {page+1}/{total_pages}", callback_data='noop')])
     
-    # Orqaga tugmasi
     back_action = 'open_keywords' if mode.startswith('kw') else 'open_groups'
     buttons.append([InlineKeyboardButton(text="🔙 Orqaga", callback_data=back_action)])
     
@@ -156,6 +164,9 @@ def pagination_kb(mode, page, total_pages):
 async def watcher(event):
     """Xabarlarni kuzatish"""
     try:
+        if shutdown_event.is_set():
+            return
+            
         if event.chat_id not in cache.groups:
             return
         
@@ -195,9 +206,9 @@ async def watcher(event):
         )
         
     except Exception as e:
-        logger.error(f"Watcher error: {e}")
+        logger.error(f"Watcher xato: {e}")
 
-# --- ASOSIY HANDLERLAR ---
+# --- HANDLERS ---
 @dp.message(Command("start"))
 async def start(m: types.Message):
     if m.from_user.id not in ADMIN_LIST:
@@ -228,7 +239,7 @@ async def open_gr(c: types.CallbackQuery):
 async def noop(c: types.CallbackQuery):
     await c.answer()
 
-# --- O'CHIRISH (TUZATILGAN) ---
+# --- O'CHIRISH ---
 @dp.callback_query(F.data == "del_kw")
 async def del_keywords(c: types.CallbackQuery):
     data = await db_execute("SELECT id, keyword FROM keywords ORDER BY keyword", fetch=True)
@@ -237,7 +248,6 @@ async def del_keywords(c: types.CallbackQuery):
         await c.answer("❌ Kalit so'zlar ro'yxati bo'sh!", show_alert=True)
         return
     
-    # Sahifalash
     cache.pagination[c.from_user.id] = {'mode': 'del_kw', 'data': data}
     await show_delete_page(c.message, data, 'kw', 0)
     await c.answer()
@@ -269,7 +279,6 @@ async def show_delete_page(message, data, mode, page):
             callback_data=f"remove_{mode}_{id}_{page}"
         )])
     
-    # Navigatsiya
     nav_row = []
     if page > 0:
         nav_row.append(InlineKeyboardButton(text="⬅️", callback_data=f'delpage_{mode}_{page-1}'))
@@ -279,7 +288,6 @@ async def show_delete_page(message, data, mode, page):
     
     kb.append(nav_row)
     
-    # Orqaga
     back_action = 'open_keywords' if mode == 'kw' else 'open_groups'
     kb.append([InlineKeyboardButton(text="🔙 Orqaga", callback_data=back_action)])
     
@@ -293,7 +301,6 @@ async def show_delete_page(message, data, mode, page):
 
 @dp.callback_query(F.data.startswith("delpage_"))
 async def handle_delete_pagination(c: types.CallbackQuery):
-    """O'chirish sahifalarini almashtirish"""
     parts = c.data.split("_")
     mode = parts[1]
     page = int(parts[2])
@@ -312,7 +319,6 @@ async def remove_keyword(c: types.CallbackQuery):
     item_id = parts[2]
     page = int(parts[3]) if len(parts) > 3 else 0
     
-    # DBdan o'chirish
     result = await db_execute("SELECT keyword FROM keywords WHERE id=?", (item_id,), fetch=True)
     
     if result:
@@ -320,7 +326,6 @@ async def remove_keyword(c: types.CallbackQuery):
         cache.keywords.discard(result[0][0].lower())
         await c.answer("✅ Kalit so'z o'chirildi!", show_alert=True)
     
-    # Yangilangan ro'yxat
     data = await db_execute("SELECT id, keyword FROM keywords ORDER BY keyword", fetch=True)
     
     if not data:
@@ -332,7 +337,6 @@ async def remove_keyword(c: types.CallbackQuery):
         cache.pagination.pop(c.from_user.id, None)
         return
     
-    # Sahifani yangilash
     per_page = 10
     total_pages = (len(data) + per_page - 1) // per_page
     if page >= total_pages:
@@ -347,7 +351,6 @@ async def remove_group(c: types.CallbackQuery):
     item_id = parts[2]
     page = int(parts[3]) if len(parts) > 3 else 0
     
-    # Guruh ma'lumotini olish
     res = await db_execute("SELECT group_id FROM search_groups WHERE id=?", (item_id,), fetch=True)
     
     if res:
@@ -360,7 +363,6 @@ async def remove_group(c: types.CallbackQuery):
         cache.groups.discard(res[0][0])
         await c.answer("✅ Guruh o'chirildi!", show_alert=True)
     
-    # Yangilangan ro'yxat
     data = await db_execute("SELECT id, group_name FROM search_groups ORDER BY group_name", fetch=True)
     
     if not data:
@@ -372,7 +374,6 @@ async def remove_group(c: types.CallbackQuery):
         cache.pagination.pop(c.from_user.id, None)
         return
     
-    # Sahifani yangilash
     per_page = 10
     total_pages = (len(data) + per_page - 1) // per_page
     if page >= total_pages:
@@ -495,7 +496,7 @@ async def text_handler(m: types.Message):
             parse_mode="HTML"
         )
 
-# --- KO'RISH (SAHIFALASH BILAN) ---
+# --- KO'RISH ---
 @dp.callback_query(F.data == "view_kw")
 async def view_keywords(c: types.CallbackQuery):
     data = await db_execute("SELECT keyword FROM keywords ORDER BY keyword", fetch=True)
@@ -553,7 +554,6 @@ async def show_view_page(message, data, mode, page):
 
 @dp.callback_query(F.data.startswith("page_view_"))
 async def handle_view_pagination(c: types.CallbackQuery):
-    """Ko'rish sahifalarini almashtirish"""
     parts = c.data.split("_")
     mode = parts[2]
     page = int(parts[3])
@@ -583,36 +583,131 @@ async def sys_status(c: types.CallbackQuery):
         
         await c.message.edit_text(txt, reply_markup=main_kb(), parse_mode="HTML")
         await c.answer()
-    except:
+    except Exception as e:
+        logger.error(f"Status error: {e}")
         await c.answer("❌ Userbot ishlamayapti!", show_alert=True)
 
-# --- BACKGROUND TASK ---
+# --- BACKGROUND TASKS ---
 async def cache_updater():
-    """Har 5 daqiqada cache'ni yangilash"""
-    while True:
+    """Cache yangilash"""
+    while not shutdown_event.is_set():
         try:
             await asyncio.sleep(300)
-            await cache.load_from_db()
-            logger.info("Cache updated")
+            if not shutdown_event.is_set():
+                await cache.load_from_db()
+                logger.info("✅ Cache yangilandi")
         except Exception as e:
             logger.error(f"Cache update error: {e}")
 
+async def health_check():
+    """Health check - Railway uchun"""
+    while not shutdown_event.is_set():
+        try:
+            await asyncio.sleep(60)
+            if not shutdown_event.is_set():
+                logger.info(f"💓 Health: OK | Keywords: {len(cache.keywords)} | Groups: {len(cache.groups)}")
+        except Exception as e:
+            logger.error(f"Health check error: {e}")
+
+# --- SHUTDOWN HANDLER ---
+async def shutdown(signal_name=None):
+    """Graceful shutdown"""
+    if signal_name:
+        logger.info(f"🛑 {signal_name} signal qabul qilindi, to'xtatilmoqda...")
+    else:
+        logger.info("🛑 To'xtatilmoqda...")
+    
+    shutdown_event.set()
+    
+    # Userbot disconnect
+    try:
+        if client.is_connected():
+            await client.disconnect()
+            logger.info("✅ Userbot uzildi")
+    except Exception as e:
+        logger.error(f"Userbot disconnect error: {e}")
+    
+    # Bot session yopish
+    try:
+        await bot.session.close()
+        logger.info("✅ Bot session yopildi")
+    except Exception as e:
+        logger.error(f"Bot session close error: {e}")
+    
+    # Executor yopish
+    try:
+        executor.shutdown(wait=False)
+        logger.info("✅ Executor yopildi")
+    except Exception as e:
+        logger.error(f"Executor shutdown error: {e}")
+    
+    logger.info("✅ Barcha xizmatlar to'xtatildi")
+
+def handle_signal(sig):
+    """Signal handler"""
+    logger.info(f"⚠️ Signal qabul qilindi: {sig}")
+    asyncio.create_task(shutdown(sig.name))
+
+# --- MAIN ---
 async def main():
-    await init_db()
-    await bot.delete_webhook(drop_pending_updates=True)
-    await client.start()
+    """Asosiy funksiya"""
+    # Signal handlers
+    loop = asyncio.get_running_loop()
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        loop.add_signal_handler(sig, lambda s=sig: handle_signal(s))
     
-    asyncio.create_task(cache_updater())
-    
-    logger.info("✅ Bot va Userbot ishga tushdi!")
-    
-    await asyncio.gather(
-        dp.start_polling(bot),
-        client.run_until_disconnected()
-    )
+    try:
+        # Database init
+        logger.info("🔄 Database yaratilmoqda...")
+        await init_db()
+        
+        # Webhook o'chirish
+        logger.info("🔄 Webhook o'chirilmoqda...")
+        await bot.delete_webhook(drop_pending_updates=True)
+        
+        # Userbot start
+        logger.info("🔄 Userbot ishga tushirilmoqda...")
+        await client.start()
+        me = await client.get_me()
+        logger.info(f"✅ Userbot ishga tushdi: @{me.username}")
+        
+        # Background tasks
+        asyncio.create_task(cache_updater())
+        asyncio.create_task(health_check())
+        
+        logger.info("="*50)
+        logger.info("✅ BOT VA USERBOT TO'LIQ ISHGA TUSHDI!")
+        logger.info("="*50)
+        
+        # Admin'ga xabar
+        try:
+            await bot.send_message(
+                DEV_ID, 
+                "🚀 <b>Bot muvaffaqiyatli ishga tushdi!</b>\n\n"
+                f"🔑 Kalit so'zlar: {len(cache.keywords)} ta\n"
+                f"📡 Guruhlar: {len(cache.groups)} ta",
+                parse_mode="HTML"
+            )
+        except:
+            pass
+        
+        # Asosiy loop
+        await asyncio.gather(
+            dp.start_polling(bot, handle_signals=False),
+            client.run_until_disconnected()
+        )
+        
+    except Exception as e:
+        logger.error(f"❌ Kritik xato: {e}")
+        await shutdown()
+    finally:
+        if not shutdown_event.is_set():
+            await shutdown()
 
 if __name__ == '__main__':
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-        logger.info("\n❌ Bot to'xtatildi")
+        logger.info("\n⚠️ KeyboardInterrupt - to'xtatildi")
+    except Exception as e:
+        logger.error(f"\n❌ Fatal error: {e}")
